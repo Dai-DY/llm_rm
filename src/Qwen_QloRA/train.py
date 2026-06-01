@@ -20,6 +20,15 @@ def make_training_arguments(training_arguments_cls, **kwargs):
     return training_arguments_cls(**kwargs)
 
 
+def make_trainer_processor_kwargs(trainer_cls, tokenizer):
+    import inspect
+
+    parameters = inspect.signature(trainer_cls.__init__).parameters
+    if "processing_class" in parameters:
+        return {"processing_class": tokenizer}
+    return {"tokenizer": tokenizer}
+
+
 def trainer_compute_metrics(eval_pred) -> dict[str, float]:
     logits = getattr(eval_pred, "predictions", eval_pred[0])
     labels = getattr(eval_pred, "label_ids", eval_pred[1])
@@ -204,9 +213,9 @@ def main() -> None:
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        tokenizer=tokenizer,
         data_collator=DataCollatorForPreference(tokenizer),
         compute_metrics=trainer_compute_metrics,
+        **make_trainer_processor_kwargs(Trainer, tokenizer),
     )
 
     print("[stage 4/5] Train")
