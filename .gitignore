@@ -1,0 +1,55 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments
+.env
+.env.*
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Jupyter and editor state
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS / filesystem metadata
+.DS_Store
+Thumbs.db
+*.Zone.Identifier
+*:Zone.Identifier
+
+# Project data and generated artifacts
+data/
+output/
+models/
+
+# Large model/checkpoint artifacts that may appear outside models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.gguf
+*.joblib
+
+# Logs and temporary files
+logs/
+*.log
+tmp/
+temp/

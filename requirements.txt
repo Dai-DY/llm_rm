@@ -1,0 +1,16 @@
+# Core data processing and calibration
+numpy>=2.2,<2.3
+pandas>=2.3,<2.4
+scikit-learn>=1.7,<1.8
+joblib>=1.5,<1.6
+tqdm>=4.67,<5
+
+# Reward-model inference
+# The deepl env currently uses torch 2.12.0+cu126. Install the CUDA build that
+# matches your driver/CUDA setup if pip does not resolve the right wheel.
+torch>=2.12,<2.13
+transformers>=5.9,<5.10
+accelerate>=1.13,<1.14
+bitsandbytes>=0.49,<0.50
+safetensors>=0.7,<0.8
+sentencepiece>=0.2,<0.3
