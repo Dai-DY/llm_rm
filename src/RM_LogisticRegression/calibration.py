@@ -46,13 +46,47 @@ def labels_to_class_ids(df: pd.DataFrame) -> np.ndarray:
     return df[LABEL_COLUMNS].to_numpy().argmax(axis=1)
 
 
+def augment_with_swapped_responses(df: pd.DataFrame, seed: int) -> pd.DataFrame:
+    swapped = df.copy()
+    swapped["id"] = swapped["id"].astype(str) + "_swap"
+
+    swapped["winner_model_a"] = df["winner_model_b"].to_numpy()
+    swapped["winner_model_b"] = df["winner_model_a"].to_numpy()
+    swapped["winner_tie"] = df["winner_tie"].to_numpy()
+
+    swapped["score_a"] = df["score_b"].to_numpy()
+    swapped["score_b"] = df["score_a"].to_numpy()
+    swapped["score_diff"] = -df["score_diff"].to_numpy()
+    swapped["score_abs_diff"] = df["score_abs_diff"].to_numpy()
+    swapped["response_a_len"] = df["response_b_len"].to_numpy()
+    swapped["response_b_len"] = df["response_a_len"].to_numpy()
+    swapped["response_len_diff"] = -df["response_len_diff"].to_numpy()
+    swapped["prompt_len"] = df["prompt_len"].to_numpy()
+
+    augmented = pd.concat([df, swapped], ignore_index=True)
+    return augmented.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+
+
 def train_logistic_calibrator(
     train_df: pd.DataFrame,
     valid_df: pd.DataFrame,
     c: float,
     max_iter: int,
+    augment_swapped: bool,
+    shuffle_seed: int,
 ) -> tuple[pd.DataFrame, float, float, float, object]:
     print("  preparing feature matrices")
+    if augment_swapped:
+        original_rows = len(train_df)
+        train_df = augment_with_swapped_responses(train_df, shuffle_seed)
+        print(
+            "  augmented train rows with swapped A/B responses: "
+            f"{original_rows} -> {len(train_df)}"
+        )
+        print(f"  shuffled augmented train rows with seed={shuffle_seed}")
+    else:
+        print("  swapped-response augmentation disabled")
+
     x_train = train_df[RM_FEATURE_COLUMNS].to_numpy(dtype=np.float64)
     y_train = labels_to_class_ids(train_df)
     x_valid = valid_df[RM_FEATURE_COLUMNS].to_numpy(dtype=np.float64)

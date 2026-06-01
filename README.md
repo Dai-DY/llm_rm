@@ -385,6 +385,21 @@ Parameters:
 - `--c`: inverse regularization strength. Recommended: `1.0`; try `0.3`, `1`, `3`.
 - `--max-iter`: optimizer iterations. Recommended: `2000`.
 - `--allow-partial`: train/evaluate on matched scored ids only. Recommended only for partial/debug scores.
+- `--augment-swapped` / `--no-augment-swapped`: duplicate training rows with A/B swapped. Enabled by default.
+- `--shuffle-seed`: seed used to shuffle original and swapped rows together. Recommended: `42`.
+
+Swapped augmentation creates one reversed training row for each original row:
+
+```text
+score_a <-> score_b
+response_a_len <-> response_b_len
+score_diff -> -score_diff
+response_len_diff -> -response_len_diff
+winner_model_a <-> winner_model_b
+winner_tie unchanged
+```
+
+The original and reversed rows are shuffled after concatenation, so opposite pairs are not placed next to each other during training.
 
 Outputs:
 

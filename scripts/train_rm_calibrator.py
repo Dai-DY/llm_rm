@@ -85,6 +85,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Evaluate on rows that have scores instead of requiring full split coverage.",
     )
+    parser.add_argument(
+        "--augment-swapped",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Augment training data by swapping response A/B features and labels. "
+            "Enabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=42,
+        help="Random seed used to shuffle augmented training rows.",
+    )
     return parser.parse_args()
 
 
@@ -121,6 +136,8 @@ def main() -> None:
     print(f"  output: {output_path}")
     print(f"  model_output: {model_output_path}")
     print(f"  allow_partial: {args.allow_partial}")
+    print(f"  augment_swapped: {args.augment_swapped}")
+    print(f"  shuffle_seed: {args.shuffle_seed}")
     print(f"  logistic_regression_C: {args.c}")
     print(f"  max_iter: {args.max_iter}")
 
@@ -146,6 +163,8 @@ def main() -> None:
         valid_df,
         c=args.c,
         max_iter=args.max_iter,
+        augment_swapped=args.augment_swapped,
+        shuffle_seed=args.shuffle_seed,
     )
 
     print("[stage 5/5] Write predictions and report log loss")
@@ -164,6 +183,8 @@ def main() -> None:
             "c": args.c,
             "max_iter": args.max_iter,
             "allow_partial": args.allow_partial,
+            "augment_swapped": args.augment_swapped,
+            "shuffle_seed": args.shuffle_seed,
             "validation_log_loss": loss,
             "validation_accuracy": accuracy,
             "validation_rows": len(valid_df),
