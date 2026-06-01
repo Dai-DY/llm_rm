@@ -45,24 +45,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="Inference batch size. Keep at 1 for 8GB VRAM.",
+        default=2,
+        help="Inference batch size.",
     )
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Load model in 4bit with bitsandbytes.",
+        default=False,
+        help="Load model in 4bit with bitsandbytes. Disabled by default for 4090 bf16 inference.",
     )
     parser.add_argument(
         "--dtype",
         choices=["auto", "float16", "bfloat16"],
-        default="float16",
-        help="Compute dtype for quantized inference.",
+        default="bfloat16",
+        help="Model compute dtype.",
     )
     parser.add_argument(
         "--gpu-memory",
-        default="7GiB",
+        default="23GiB",
         help="Max memory for GPU 0 when using device_map=auto.",
     )
     parser.add_argument(

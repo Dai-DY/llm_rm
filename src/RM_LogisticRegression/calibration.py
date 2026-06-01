@@ -9,6 +9,7 @@ from sklearn.preprocessing import StandardScaler
 
 from RM_LogisticRegression.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
 from RM_LogisticRegression.data import validate_one_hot_labels
+from RM_LogisticRegression.metrics import multiclass_accuracy
 
 
 def read_joined_scores(
@@ -50,7 +51,7 @@ def train_logistic_calibrator(
     valid_df: pd.DataFrame,
     c: float,
     max_iter: int,
-) -> tuple[pd.DataFrame, float, float, object]:
+) -> tuple[pd.DataFrame, float, float, float, object]:
     print("  preparing feature matrices")
     x_train = train_df[RM_FEATURE_COLUMNS].to_numpy(dtype=np.float64)
     y_train = labels_to_class_ids(train_df)
@@ -85,8 +86,9 @@ def train_logistic_calibrator(
             * np.log(np.clip(ordered_probabilities, 1e-15, 1.0))
         ).sum(axis=1).mean()
     )
+    accuracy = multiclass_accuracy(y_valid_one_hot, ordered_probabilities)
 
     output = pd.DataFrame({"id": valid_df["id"].to_numpy()})
     for index, column in enumerate(LABEL_COLUMNS):
         output[column] = ordered_probabilities[:, index]
-    return output, float(loss), manual_loss, model
+    return output, float(loss), manual_loss, accuracy, model

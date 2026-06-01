@@ -36,3 +36,8 @@ def multiclass_log_loss(y_true: np.ndarray, y_pred: np.ndarray, clip: float) -> 
     y_pred = y_pred / y_pred.sum(axis=1, keepdims=True)
     return float(-(y_true * np.log(y_pred)).sum(axis=1).mean())
 
+
+def multiclass_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    true_labels = y_true.argmax(axis=1)
+    pred_labels = y_pred.argmax(axis=1)
+    return float((true_labels == pred_labels).mean())

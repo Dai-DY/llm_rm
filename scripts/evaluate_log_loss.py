@@ -6,7 +6,11 @@ import pandas as pd
 
 from RM_LogisticRegression.constants import LABEL_COLUMNS
 from RM_LogisticRegression.data import read_required_columns, validate_one_hot_labels
-from RM_LogisticRegression.metrics import multiclass_log_loss, prepare_prediction_probabilities
+from RM_LogisticRegression.metrics import (
+    multiclass_accuracy,
+    multiclass_log_loss,
+    prepare_prediction_probabilities,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,10 +77,11 @@ def main() -> None:
     )
 
     loss = multiclass_log_loss(y_true, y_pred, args.clip)
+    accuracy = multiclass_accuracy(y_true, y_pred)
     print(f"log_loss={loss:.8f}")
+    print(f"accuracy={accuracy:.8f}")
     print(f"rows={len(merged)}")
 
 
 if __name__ == "__main__":
     main()
-

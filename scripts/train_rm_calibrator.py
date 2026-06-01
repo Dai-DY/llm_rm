@@ -141,7 +141,7 @@ def main() -> None:
     print(f"  valid rows: {len(valid_df)}")
 
     print("[stage 4/5] Train LogisticRegression calibrator and predict validation probabilities")
-    output, loss, manual_loss, model = train_logistic_calibrator(
+    output, loss, manual_loss, accuracy, model = train_logistic_calibrator(
         train_df,
         valid_df,
         c=args.c,
@@ -165,6 +165,7 @@ def main() -> None:
             "max_iter": args.max_iter,
             "allow_partial": args.allow_partial,
             "validation_log_loss": loss,
+            "validation_accuracy": accuracy,
             "validation_rows": len(valid_df),
         },
         model_output_path,
@@ -172,6 +173,7 @@ def main() -> None:
 
     print(f"log_loss={loss:.8f}")
     print(f"manual_log_loss={manual_loss:.8f}")
+    print(f"accuracy={accuracy:.8f}")
     print(f"rows={len(valid_df)}")
     print(f"Wrote {output_path}")
     print(f"Wrote {model_output_path}")

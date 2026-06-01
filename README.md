@@ -1,43 +1,19 @@
 # LLM Preference Modeling
 
-This project predicts which LLM response is preferred for a prompt:
-
-- `winner_model_a`
-- `winner_model_b`
-- `winner_tie`
-
-The validation metric is multi-class log loss between predicted probabilities and the one-hot ground truth labels.
-
-## Current Method: RM_LogisticRegression
-
-`RM_LogisticRegression` is a lightweight baseline with two stages:
-
-1. Use `sfairXC/FsfairX-Gemma2-RM-v0.1` as a reward model to score each response independently.
-2. Train a multinomial Logistic Regression calibrator on reward scores and length features.
-
-For each row:
+This project predicts which response is preferred for each prompt:
 
 ```text
-score_a = RM(prompt, response_a)
-score_b = RM(prompt, response_b)
+winner_model_a, winner_model_b, winner_tie
 ```
 
-The calibrator learns:
+The primary validation metric is multi-class log loss on predicted probabilities. Scripts also print hard-label accuracy from `argmax(probabilities)`.
 
-```text
-[score_a, score_b, score_diff, score_abs_diff, length features]
-  -> [P(A wins), P(B wins), P(tie)]
-```
-
-This is useful because the reward model gives a quality score for one response, while the competition needs calibrated three-class probabilities.
-
-## Project Layout
+## Layout
 
 ```text
 data/
   train.csv
   test.csv
-  sample_submission.csv
   train_split.csv
   valid_split.csv
 
@@ -45,95 +21,70 @@ models/
   sfairXC__FsfairX-Gemma2-RM-v0.1/
   Qwen__Qwen2.5-3B-Instruct/
 
-output/
-  YYYY-MM-DD_HH-MM/
-    RM_LogisticRegression/
-      train_split_gemma_rm_scores.csv
-      valid_split_gemma_rm_scores.csv
-      rm_calibrated_valid_predictions.csv
-      rm_logistic_regression_model.joblib
-
 scripts/
   create_validation_split.py
+  evaluate_log_loss.py
   score_gemma_rm.py
   train_rm_calibrator.py
-  evaluate_log_loss.py
 
 src/
+  Gemma2_QLoRA/
+  Qwen_QloRA/
   RM_LogisticRegression/
 ```
 
-`data/` should hold raw data and reusable splits. Model outputs and experiment artifacts should go under `output/<run-name>/<method-name>/`.
-
-## Environment
-
-Use the `deepl` conda environment:
+Use the `deepl` environment:
 
 ```bash
 conda activate deepl
 ```
 
-Or run commands without activating:
+Current defaults are tuned for an RTX 4090 24GB GPU and use bf16 LoRA, not 4-bit quantization.
+
+## Recommended Main Run
+
+Gemma2 RM LoRA is the main high-quality path:
 
 ```bash
-conda run -n deepl python ...
+PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
+  --train data/train_split.csv \
+  --valid data/valid_split.csv \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --output-dir output/gemma2_qlora_rm \
+  --max-length 1800 \
+  --batch-size 2 \
+  --eval-batch-size 2 \
+  --gradient-accumulation-steps 8 \
+  --epochs 1 \
+  --learning-rate 2e-4
 ```
 
-The Gemma2 reward model can run on an 8GB GPU with 4-bit loading. Recommended starting settings:
-
-```text
-max_length=512
-batch_size=2
-gpu_memory=7.6GiB
-dtype=float16
-```
-
-If you hit OOM, lower `--batch-size` to `1`, then lower `--max-length` to `384` or `256`.
-
-## Run Name
-
-Outputs are grouped by run name:
-
-```text
-output/YYYY-MM-DD_HH-MM/RM_LogisticRegression/
-```
-
-By default, scripts use the current time down to the minute, for example:
-
-```text
-output/2026-06-01_00-20/RM_LogisticRegression/
-```
-
-For a full experiment, set one run name and reuse it in every command:
+Evaluate:
 
 ```bash
-RUN_NAME=2026-06-01_00-20
+python scripts/evaluate_log_loss.py \
+  --predictions output/gemma2_qlora_rm/gemma2_qlora_valid_predictions.csv
 ```
 
-This matters because reward scoring can take a long time, and the calibrator needs to read the score files from the same run folder.
-
-## Step 1: Create Validation Split
-
-Script:
-
-```text
-scripts/create_validation_split.py
-```
-
-Purpose:
-
-- Reads `data/train.csv`
-- Creates a stratified train/validation split
-- Preserves the A/B/tie label distribution
-- Writes `data/train_split.csv` and `data/valid_split.csv`
-
-Default command:
+Predict test:
 
 ```bash
-python scripts/create_validation_split.py
+PYTHONPATH=src python src/Gemma2_QLoRA/predict.py \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --adapter output/gemma2_qlora_rm/adapter \
+  --input data/test.csv \
+  --output output/gemma2_qlora_rm/submission.csv
 ```
 
-Equivalent explicit command:
+If Gemma2 hits OOM, use `--batch-size 1 --eval-batch-size 1 --gradient-accumulation-steps 16`.
+
+## Data And Evaluation Scripts
+
+### `scripts/create_validation_split.py`
+
+Creates a stratified train/validation split.
+
+Recommended command:
 
 ```bash
 python scripts/create_validation_split.py \
@@ -144,229 +95,25 @@ python scripts/create_validation_split.py \
   --seed 42
 ```
 
-Output:
+Parameters:
 
-```text
-data/train_split.csv
-data/valid_split.csv
-```
+- `--input`: source labeled CSV. Recommended: `data/train.csv`.
+- `--train-output`: output training split. Recommended: `data/train_split.csv`.
+- `--valid-output`: output validation split. Recommended: `data/valid_split.csv`.
+- `--valid-size`: validation fraction. Recommended: `0.1`.
+- `--seed`: random seed for reproducible split. Recommended: `42`.
 
-## Step 2: Score Responses With Gemma2 RM
+### `scripts/evaluate_log_loss.py`
 
-Script:
+Evaluates a prediction CSV against validation labels. It prints both log loss and accuracy.
 
-```text
-scripts/score_gemma_rm.py
-```
-
-Purpose:
-
-- Loads the local Gemma2 reward model
-- Scores `prompt + response_a`
-- Scores `prompt + response_b`
-- Writes score and length features to CSV
-
-Important output columns:
-
-```text
-id
-score_a
-score_b
-score_diff
-score_abs_diff
-prompt_len
-response_a_len
-response_b_len
-response_len_diff
-```
-
-### Smoke Test
-
-Run a tiny test first:
+Recommended command:
 
 ```bash
-RUN_NAME=2026-06-01_00-20
-
-conda run -n deepl python scripts/score_gemma_rm.py \
-  --input data/valid_split.csv \
-  --run-name $RUN_NAME \
-  --max-length 512 \
-  --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
-  --limit 10 \
-  --save-every 5 \
-  --resume
+python scripts/evaluate_log_loss.py \
+  --labels data/valid_split.csv \
+  --predictions output/gemma2_qlora_rm/gemma2_qlora_valid_predictions.csv
 ```
-
-This writes:
-
-```text
-output/<RUN_NAME>/RM_LogisticRegression/valid_split_gemma_rm_scores_limit10.csv
-```
-
-### Score Validation Split
-
-```bash
-RUN_NAME=2026-06-01_00-20
-
-conda run -n deepl python scripts/score_gemma_rm.py \
-  --input data/valid_split.csv \
-  --run-name $RUN_NAME \
-  --max-length 512 \
-  --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
-  --save-every 100 \
-  --resume
-```
-
-Default output:
-
-```text
-output/<RUN_NAME>/RM_LogisticRegression/valid_split_gemma_rm_scores.csv
-```
-
-### Score Training Split
-
-For a quick partial run:
-
-```bash
-RUN_NAME=2026-06-01_00-20
-
-conda run -n deepl python scripts/score_gemma_rm.py \
-  --input data/train_split.csv \
-  --run-name $RUN_NAME \
-  --max-length 512 \
-  --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
-  --limit 1000 \
-  --save-every 100 \
-  --resume
-```
-
-Default output:
-
-```text
-output/<RUN_NAME>/RM_LogisticRegression/train_split_gemma_rm_scores_limit1000.csv
-```
-
-For full training scores, remove `--limit`:
-
-```bash
-RUN_NAME=2026-06-01_00-20
-
-conda run -n deepl python scripts/score_gemma_rm.py \
-  --input data/train_split.csv \
-  --run-name $RUN_NAME \
-  --max-length 512 \
-  --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
-  --save-every 100 \
-  --resume
-```
-
-Default output:
-
-```text
-output/<RUN_NAME>/RM_LogisticRegression/train_split_gemma_rm_scores.csv
-```
-
-`--resume` skips ids that already exist in the output CSV, so long scoring jobs can be stopped and restarted.
-
-## Step 3: Train Logistic Regression Calibrator
-
-Script:
-
-```text
-scripts/train_rm_calibrator.py
-```
-
-Purpose:
-
-- Reads train labels
-- Reads validation labels
-- Reads RM score CSV files
-- Trains a multinomial Logistic Regression calibrator
-- Writes calibrated validation probabilities
-- Saves the trained classifier model
-- Prints validation log loss
-
-### Full Default Run
-
-This expects the full default score files:
-
-```text
-output/<RUN_NAME>/RM_LogisticRegression/train_split_gemma_rm_scores.csv
-output/<RUN_NAME>/RM_LogisticRegression/valid_split_gemma_rm_scores.csv
-```
-
-Command:
-
-```bash
-RUN_NAME=2026-06-01_00-20
-
-python scripts/train_rm_calibrator.py \
-  --run-name $RUN_NAME
-```
-
-Output:
-
-```text
-output/<RUN_NAME>/RM_LogisticRegression/rm_calibrated_valid_predictions.csv
-output/<RUN_NAME>/RM_LogisticRegression/rm_logistic_regression_model.joblib
-```
-
-### Partial Run
-
-If you only scored part of the train or validation split, use `--allow-partial` and pass the score files explicitly:
-
-```bash
-RUN_NAME=2026-06-01_00-20
-
-python scripts/train_rm_calibrator.py \
-  --train-scores output/$RUN_NAME/RM_LogisticRegression/train_split_gemma_rm_scores_limit1000.csv \
-  --valid-scores output/$RUN_NAME/RM_LogisticRegression/valid_split_gemma_rm_scores.csv \
-  --output output/$RUN_NAME/RM_LogisticRegression/rm_calibrated_valid_predictions_partial.csv \
-  --model-output output/$RUN_NAME/RM_LogisticRegression/rm_logistic_regression_model_limit1000.joblib \
-  --allow-partial
-```
-
-Current partial result:
-
-```text
-1000 train score rows
-1300 valid score rows
-log_loss ~= 1.04195
-```
-
-Uniform baseline is:
-
-```text
-log_loss ~= 1.09861
-```
-
-So the RM scores are already useful.
-
-## Step 4: Evaluate Predictions
-
-Script:
-
-```text
-scripts/evaluate_log_loss.py
-```
-
-Purpose:
-
-- Reads a predictions CSV
-- Joins it with validation labels by `id`
-- Computes multi-class log loss
 
 Prediction CSV format:
 
@@ -374,109 +121,217 @@ Prediction CSV format:
 id,winner_model_a,winner_model_b,winner_tie
 ```
 
-Command:
+Parameters:
 
-```bash
-RUN_NAME=2026-06-01_00-20
+- `--labels`: validation CSV with one-hot labels. Recommended: `data/valid_split.csv`.
+- `--predictions`: prediction probability CSV to evaluate.
+- `--normalize`: normalize prediction rows to sum to 1 before scoring. Recommended only if your output is unnormalized.
+- `--allow-partial`: evaluate matched ids only. Recommended only for partial/debug predictions.
+- `--clip`: probability clipping epsilon. Recommended: default `1e-15`.
 
-python scripts/evaluate_log_loss.py \
-  --predictions output/$RUN_NAME/RM_LogisticRegression/rm_calibrated_valid_predictions.csv
+## Gemma2 LoRA Scripts
+
+### `src/Gemma2_QLoRA/train.py`
+
+Fine-tunes `sfairXC__FsfairX-Gemma2-RM-v0.1` directly as a three-class preference classifier.
+
+Input format:
+
+```text
+<PROMPT>...</PROMPT><RESPONSE A>...</RESPONSE A><RESPONSE B>...</RESPONSE B>
 ```
 
-For partial validation predictions:
+Default classification head:
 
-```bash
-RUN_NAME=2026-06-01_00-20
-
-python scripts/evaluate_log_loss.py \
-  --predictions output/$RUN_NAME/RM_LogisticRegression/rm_calibrated_valid_predictions_partial.csv \
-  --allow-partial
+```text
+LayerNorm(3584)
+Dropout(0.1)
+Linear(3584, 1792)
+GELU
+Dropout(0.1)
+Linear(1792, 3)
 ```
 
-Useful options:
+Recommended command:
 
-- `--labels`: label CSV, default `data/valid_split.csv`
-- `--normalize`: normalize prediction rows before evaluation
-- `--allow-partial`: evaluate matched ids only
-- `--clip`: probability clipping value before log loss
+```bash
+PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
+  --train data/train_split.csv \
+  --valid data/valid_split.csv \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --output-dir output/gemma2_qlora_rm \
+  --max-length 1800 \
+  --batch-size 2 \
+  --eval-batch-size 2 \
+  --gradient-accumulation-steps 8 \
+  --epochs 1 \
+  --learning-rate 2e-4
+```
 
-## Script Summary
+Parameters:
 
-### `scripts/create_validation_split.py`
+- `--model`: local Gemma2 RM path. Recommended: `models/sfairXC__FsfairX-Gemma2-RM-v0.1`.
+- `--train`: training split. Recommended: `data/train_split.csv`.
+- `--valid`: validation split. Recommended: `data/valid_split.csv`.
+- `--output-dir`: output directory for checkpoints, adapter, and validation predictions.
+- `--max-length`: token truncation length. Recommended: `1800`; lower to `1536` or `1024` if OOM.
+- `--batch-size`: per-device train batch size. Recommended for 4090: `2`.
+- `--eval-batch-size`: per-device eval batch size. Recommended for 4090: `2`.
+- `--gradient-accumulation-steps`: accumulation steps. Recommended: `8`, giving effective batch `16`.
+- `--epochs`: training epochs. Recommended: `1` first, then try `2`.
+- `--learning-rate`: LoRA learning rate. Recommended: `2e-4`; try `1e-4` if unstable.
+- `--dtype`: model dtype. Recommended: `bfloat16`.
+- `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
+- `--lora-r`: LoRA rank. Recommended: `64`.
+- `--lora-alpha`: LoRA alpha. Recommended: `16`.
+- `--lora-dropout`: LoRA dropout. Recommended: `0.05`.
+- `--target-modules`: LoRA targets. Recommended: `all-linear`.
+- `--classifier-head`: `mlp` or `linear`. Recommended: `mlp`.
+- `--head-dropout`: MLP head dropout. Recommended: `0.1`.
+- `--head-hidden-ratio`: MLP hidden size ratio. Recommended: `0.5`.
+- `--disable-softcapping`: disable Gemma2 softcapping. Recommended: enabled.
+- `--swap-augmentation`: duplicate training rows with A/B swapped. Recommended: enabled.
+- `--valid-tta`: average validation predictions with A/B-flipped TTA. Recommended: enabled.
+- `--eval-steps`: validation frequency. Recommended: `200`.
+- `--save-steps`: checkpoint frequency. Recommended: `200`.
+- `--save-total-limit`: max checkpoints to keep. Recommended: `2`.
+- `--limit-train`, `--limit-valid`: optional row limits for debugging. Recommended: unset for real runs.
 
-Creates reproducible stratified train/validation splits.
+Outputs:
 
-Key args:
+```text
+output/gemma2_qlora_rm/adapter/
+output/gemma2_qlora_rm/gemma2_qlora_valid_predictions.csv
+```
 
-- `--input`
-- `--train-output`
-- `--valid-output`
-- `--valid-size`
-- `--seed`
+### `src/Gemma2_QLoRA/predict.py`
+
+Loads a trained Gemma2 LoRA adapter and writes probabilities for validation or test rows.
+
+Recommended command:
+
+```bash
+PYTHONPATH=src python src/Gemma2_QLoRA/predict.py \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --adapter output/gemma2_qlora_rm/adapter \
+  --input data/test.csv \
+  --output output/gemma2_qlora_rm/submission.csv
+```
+
+Parameters:
+
+- `--model`: base Gemma2 RM path.
+- `--adapter`: trained adapter directory. Recommended: `output/gemma2_qlora_rm/adapter`.
+- `--input`: CSV to predict. Use `data/test.csv` for submission.
+- `--output`: output probability CSV.
+- `--max-length`: token truncation length. Use the training value, recommended `1800`.
+- `--batch-size`: inference batch size. Recommended for 4090: `2`.
+- `--has-labels`: set when predicting validation CSVs that include labels.
+- `--tta`: A/B flip test-time augmentation. Recommended: enabled.
+- `--dtype`: model dtype. Recommended: `bfloat16`.
+- `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
+- `--classifier-head`, `--head-dropout`, `--head-hidden-ratio`: loaded from adapter config by default; override only when needed.
+- `--disable-softcapping`: should match training. Recommended: enabled.
+- `--limit`: optional row limit for debugging. Recommended: unset for real predictions.
+
+## Qwen LoRA Scripts
+
+### `src/Qwen_QloRA/train.py`
+
+Fine-tunes `Qwen2.5-3B-Instruct` as a three-class classifier. This is lighter than Gemma2 and useful as a baseline or student model.
+
+Recommended command:
+
+```bash
+PYTHONPATH=src python src/Qwen_QloRA/train.py \
+  --train data/train_split.csv \
+  --valid data/valid_split.csv \
+  --model models/Qwen__Qwen2.5-3B-Instruct \
+  --output-dir output/qwen_qlora_3b \
+  --max-length 1800 \
+  --batch-size 4 \
+  --eval-batch-size 4 \
+  --gradient-accumulation-steps 4 \
+  --epochs 1 \
+  --learning-rate 2e-4 \
+  --swap-augmentation
+```
+
+Parameters:
+
+- `--model`: local Qwen path. Recommended: `models/Qwen__Qwen2.5-3B-Instruct`.
+- `--train`, `--valid`: train and validation split CSVs.
+- `--output-dir`: output directory.
+- `--max-length`: token truncation length. Recommended: `1800`.
+- `--batch-size`: per-device train batch. Recommended for 4090: `4`; use `2` if OOM.
+- `--eval-batch-size`: per-device eval batch. Recommended for 4090: `4`.
+- `--gradient-accumulation-steps`: recommended `4`, effective batch `16`.
+- `--epochs`: recommended `1` first.
+- `--learning-rate`: recommended `2e-4`.
+- `--dtype`: recommended `bfloat16`.
+- `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
+- `--lora-r`: recommended `64`.
+- `--lora-alpha`: recommended `16`.
+- `--lora-dropout`: recommended `0.05`.
+- `--target-modules`: recommended `q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj`.
+- `--swap-augmentation`: recommended enabled.
+- `--eval-steps`, `--save-steps`: recommended `200`.
+- `--limit-train`, `--limit-valid`: optional debug limits. Recommended: unset.
+
+Output:
+
+```text
+output/qwen_qlora_3b/adapter/
+output/qwen_qlora_3b/qwen_qlora_valid_predictions.csv
+```
+
+### `src/Qwen_QloRA/predict.py`
+
+Loads a trained Qwen LoRA adapter and writes probabilities.
+
+Recommended command:
+
+```bash
+PYTHONPATH=src python src/Qwen_QloRA/predict.py \
+  --model models/Qwen__Qwen2.5-3B-Instruct \
+  --adapter output/qwen_qlora_3b/adapter \
+  --input data/test.csv \
+  --output output/qwen_qlora_3b/submission.csv
+```
+
+Parameters:
+
+- `--model`: base Qwen path.
+- `--adapter`: trained adapter directory.
+- `--input`: CSV to predict.
+- `--output`: output probability CSV.
+- `--max-length`: use the training value, recommended `1800`.
+- `--batch-size`: inference batch size. Recommended for 4090: `4`.
+- `--has-labels`: set for validation CSVs.
+- `--dtype`: recommended `bfloat16`.
+- `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
+- `--limit`: optional debug row limit. Recommended: unset.
+
+## RM Logistic Regression Baseline
+
+This baseline scores each response independently with Gemma2 RM, then trains a logistic-regression calibrator on score and length features. It is cheaper to analyze and useful for ensembling, but the direct Gemma2 LoRA classifier is the stronger main path.
 
 ### `scripts/score_gemma_rm.py`
 
-Runs Gemma2 RM inference and writes score features.
+Writes score features for a split.
 
-Key args:
-
-- `--input`: CSV to score
-- `--output`: explicit output path
-- `--run-name`: output folder name, e.g. `2026-06-01_00-20`
-- `--limit`: optional row limit for smoke tests
-- `--resume`: skip ids already written
-- `--max-length`: token truncation length
-- `--batch-size`: inference batch size
-- `--load-in-4bit`: 4-bit loading, enabled by default
-- `--dtype`: usually `float16`
-- `--gpu-memory`: recommended `7.6GiB` for an 8GB GPU
-
-### `scripts/train_rm_calibrator.py`
-
-Trains Logistic Regression on RM score features.
-
-Key args:
-
-- `--train-labels`
-- `--valid-labels`
-- `--train-scores`
-- `--valid-scores`
-- `--output`
-- `--model-output`
-- `--run-name`
-- `--allow-partial`
-- `--c`: Logistic Regression inverse regularization
-- `--max-iter`
-
-### `scripts/evaluate_log_loss.py`
-
-Evaluates prediction probabilities.
-
-Key args:
-
-- `--labels`
-- `--predictions`
-- `--allow-partial`
-- `--normalize`
-- `--clip`
-
-## Recommended From-Scratch Workflow
+Recommended commands:
 
 ```bash
-conda activate deepl
-
 RUN_NAME=$(date +"%Y-%m-%d_%H-%M")
-
-python scripts/create_validation_split.py
 
 python scripts/score_gemma_rm.py \
   --input data/valid_split.csv \
   --run-name $RUN_NAME \
   --max-length 512 \
   --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
+  --dtype bfloat16 \
+  --gpu-memory 23GiB \
   --save-every 100 \
   --resume
 
@@ -485,42 +340,64 @@ python scripts/score_gemma_rm.py \
   --run-name $RUN_NAME \
   --max-length 512 \
   --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
+  --dtype bfloat16 \
+  --gpu-memory 23GiB \
   --save-every 100 \
   --resume
+```
 
+Parameters:
+
+- `--model`: local Gemma2 RM path.
+- `--input`: split CSV to score.
+- `--output`: explicit score CSV path. Usually leave unset.
+- `--run-name`: output folder name. Use one shared value for train and valid scores.
+- `--max-length`: token truncation length. Recommended: `512` for fast RM scoring.
+- `--batch-size`: inference batch size. Recommended for 4090: `2`.
+- `--dtype`: recommended `bfloat16`.
+- `--gpu-memory`: max GPU memory for device map. Recommended: `23GiB`.
+- `--cpu-memory`: CPU offload memory. Recommended: default `48GiB`.
+- `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
+- `--limit`: optional row limit. Recommended: unset for full scores.
+- `--save-every`: checkpoint interval. Recommended: `100`.
+- `--resume`: skip already-scored ids. Recommended: enabled.
+
+### `scripts/train_rm_calibrator.py`
+
+Trains a multinomial Logistic Regression calibrator on RM score files.
+
+Recommended command:
+
+```bash
 python scripts/train_rm_calibrator.py \
   --run-name $RUN_NAME
-
-python scripts/evaluate_log_loss.py \
-  --predictions output/$RUN_NAME/RM_LogisticRegression/rm_calibrated_valid_predictions.csv
 ```
 
-For a faster first run, score only 1000 train rows:
+Parameters:
 
-```bash
-python scripts/score_gemma_rm.py \
-  --input data/train_split.csv \
-  --run-name $RUN_NAME \
-  --max-length 512 \
-  --batch-size 2 \
-  --load-in-4bit \
-  --dtype float16 \
-  --gpu-memory 7.6GiB \
-  --limit 1000 \
-  --save-every 100 \
-  --resume
+- `--train-labels`: training labels. Recommended: `data/train_split.csv`.
+- `--valid-labels`: validation labels. Recommended: `data/valid_split.csv`.
+- `--train-scores`: train score CSV. Usually inferred from `--run-name`.
+- `--valid-scores`: valid score CSV. Usually inferred from `--run-name`.
+- `--output`: validation probability output CSV. Usually inferred from `--run-name`.
+- `--model-output`: saved calibrator path. Usually inferred from `--run-name`.
+- `--run-name`: output run folder shared with `score_gemma_rm.py`.
+- `--c`: inverse regularization strength. Recommended: `1.0`; try `0.3`, `1`, `3`.
+- `--max-iter`: optimizer iterations. Recommended: `2000`.
+- `--allow-partial`: train/evaluate on matched scored ids only. Recommended only for partial/debug scores.
+
+Outputs:
+
+```text
+output/<RUN_NAME>/RM_LogisticRegression/rm_calibrated_valid_predictions.csv
+output/<RUN_NAME>/RM_LogisticRegression/rm_logistic_regression_model.joblib
 ```
 
-Then train with explicit partial paths:
+The script prints:
 
-```bash
-python scripts/train_rm_calibrator.py \
-  --train-scores output/$RUN_NAME/RM_LogisticRegression/train_split_gemma_rm_scores_limit1000.csv \
-  --valid-scores output/$RUN_NAME/RM_LogisticRegression/valid_split_gemma_rm_scores.csv \
-  --output output/$RUN_NAME/RM_LogisticRegression/rm_calibrated_valid_predictions_partial.csv \
-  --model-output output/$RUN_NAME/RM_LogisticRegression/rm_logistic_regression_model_limit1000.joblib \
-  --allow-partial
+```text
+log_loss
+manual_log_loss
+accuracy
+rows
 ```
