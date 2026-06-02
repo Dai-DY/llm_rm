@@ -7,6 +7,12 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from hardware_profiles import (
+    add_hardware_profile_argument,
+    apply_profile_defaults,
+    kbit_device_map,
+    model_input_device,
+)
 from Gemma2_QLoRA.constants import DEFAULT_MODEL_PATH, LABEL_COLUMNS
 from Gemma2_QLoRA.data import DataCollatorForPreference, PreferenceDataset
 from Gemma2_QLoRA.metrics import softmax
@@ -23,7 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="Input CSV.")
     parser.add_argument("--output", required=True, help="Output probability CSV.")
     parser.add_argument("--max-length", type=int, default=1800, help="Max token length.")
-    parser.add_argument("--batch-size", type=int, default=2, help="Inference batch size.")
+    add_hardware_profile_argument(parser)
+    parser.add_argument("--batch-size", type=int, default=None, help="Inference batch size.")
     parser.add_argument("--limit", type=int, default=None, help="Optional row limit.")
     parser.add_argument("--has-labels", action="store_true", help="Input has labels.")
     parser.add_argument(
@@ -59,16 +66,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dtype",
         choices=["auto", "float16", "bfloat16", "float32"],
-        default="bfloat16",
+        default=None,
         help="Model compute dtype.",
     )
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Use bitsandbytes 4-bit loading. Disabled by default for 4090 bf16 LoRA.",
     )
-    return parser.parse_args()
+    return apply_profile_defaults(parser.parse_args(), "gemma_predict")
 
 
 def apply_adapter_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
@@ -104,6 +111,7 @@ def load_model(args: argparse.Namespace):
             ),
             bnb_4bit_use_double_quant=True,
         )
+    device_map = kbit_device_map() if args.load_in_4bit else None
 
     base = AutoModelForSequenceClassification.from_pretrained(
         args.model,
@@ -111,7 +119,7 @@ def load_model(args: argparse.Namespace):
         trust_remote_code=True,
         torch_dtype=torch_dtype(args.dtype),
         quantization_config=quantization_config,
-        device_map="auto" if args.load_in_4bit else None,
+        device_map=device_map,
         ignore_mismatched_sizes=True,
     )
     if base.config.pad_token_id is None:
@@ -143,7 +151,8 @@ def predict_dataset(model, dataset: PreferenceDataset, tokenizer, batch_size: in
         for batch in tqdm(loader, desc="predict"):
             row_ids = batch.pop("id")
             batch.pop("labels", None)
-            batch = {key: value.to(model.device) for key, value in batch.items()}
+            device = model_input_device(model)
+            batch = {key: value.to(device) for key, value in batch.items()}
             logits = model(**batch).logits.detach().float().cpu().numpy()
             ids.extend(row_ids)
             probabilities.extend(softmax(logits))
@@ -153,6 +162,10 @@ def predict_dataset(model, dataset: PreferenceDataset, tokenizer, batch_size: in
 def main() -> None:
     args = parse_args()
     args = apply_adapter_config_defaults(args)
+    print(f"hardware_profile: {args.hardware_profile} ({args.hardware_description})")
+    print(f"batch_size: {args.batch_size}")
+    print(f"dtype: {args.dtype}")
+    print(f"load_in_4bit: {args.load_in_4bit}")
     tokenizer = load_tokenizer(args.adapter)
     model = load_model(args)
 

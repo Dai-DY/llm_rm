@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from hardware_profiles import add_hardware_profile_argument, apply_profile_defaults
 from Qwen_QloRA.constants import DEFAULT_MODEL_PATH, DEFAULT_OUTPUT_DIR, LABEL_COLUMNS
 from Qwen_QloRA.data import DataCollatorForPreference, PreferenceDataset
 from Qwen_QloRA.metrics import multiclass_log_loss, softmax
@@ -46,17 +47,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-length", type=int, default=1800, help="Max token length.")
     parser.add_argument("--epochs", type=float, default=1.0, help="Number of train epochs.")
     parser.add_argument("--learning-rate", type=float, default=2e-4, help="Learning rate.")
-    parser.add_argument("--batch-size", type=int, default=4, help="Per-device train batch size.")
+    add_hardware_profile_argument(parser)
+    parser.add_argument("--batch-size", type=int, default=None, help="Per-device train batch size.")
     parser.add_argument(
         "--eval-batch-size",
         type=int,
-        default=4,
+        default=None,
         help="Per-device eval batch size.",
     )
     parser.add_argument(
         "--gradient-accumulation-steps",
         type=int,
-        default=4,
+        default=None,
         help="Gradient accumulation steps.",
     )
     parser.add_argument("--warmup-ratio", type=float, default=0.03, help="Warmup ratio.")
@@ -72,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Use bitsandbytes 4-bit loading. Disabled by default for 4090 bf16 LoRA.",
     )
     parser.add_argument(
@@ -84,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dtype",
         choices=["auto", "float16", "bfloat16", "float32"],
-        default="bfloat16",
+        default=None,
         help="Model compute dtype.",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
@@ -99,7 +101,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Duplicate training rows with response A/B swapped.",
     )
-    return parser.parse_args()
+    return apply_profile_defaults(parser.parse_args(), "qwen_train")
 
 
 def write_validation_predictions(
@@ -147,6 +149,12 @@ def main() -> None:
     tokenizer = load_tokenizer(args.model)
     print(f"  model: {args.model}")
     print(f"  max_length: {args.max_length}")
+    print(f"  hardware_profile: {args.hardware_profile} ({args.hardware_description})")
+    print(f"  batch_size: {args.batch_size}")
+    print(f"  eval_batch_size: {args.eval_batch_size}")
+    print(f"  gradient_accumulation_steps: {args.gradient_accumulation_steps}")
+    print(f"  dtype: {args.dtype}")
+    print(f"  load_in_4bit: {args.load_in_4bit}")
 
     print("[stage 2/5] Build datasets")
     train_dataset = PreferenceDataset(
@@ -205,6 +213,7 @@ def main() -> None:
         report_to="none",
         remove_unused_columns=False,
         dataloader_pin_memory=False,
+        ddp_find_unused_parameters=False,
         seed=args.seed,
     )
 

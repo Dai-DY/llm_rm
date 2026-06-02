@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from hardware_profiles import kbit_device_map
 from Gemma2_QLoRA.constants import ID_TO_LABEL, LABEL_TO_ID
 
 
@@ -120,6 +121,7 @@ def load_gemma2_sequence_classifier(
     config = maybe_disable_softcapping(config, disable_softcapping)
 
     quantization_config = None
+    device_map = None
     if load_in_4bit:
         compute_dtype = torch.float16 if dtype == "auto" else torch_dtype(dtype)
         quantization_config = BitsAndBytesConfig(
@@ -128,6 +130,7 @@ def load_gemma2_sequence_classifier(
             bnb_4bit_compute_dtype=compute_dtype,
             bnb_4bit_use_double_quant=True,
         )
+        device_map = kbit_device_map()
 
     model = AutoModelForSequenceClassification.from_pretrained(
         model_path,
@@ -135,7 +138,7 @@ def load_gemma2_sequence_classifier(
         trust_remote_code=True,
         torch_dtype=torch_dtype(dtype),
         quantization_config=quantization_config,
-        device_map="auto" if load_in_4bit else None,
+        device_map=device_map,
         ignore_mismatched_sizes=True,
     )
 

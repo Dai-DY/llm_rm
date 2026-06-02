@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from hardware_profiles import max_memory_map, model_input_device
 from RM_LogisticRegression.data import build_reward_text, text_char_length
 
 
@@ -57,7 +58,7 @@ def load_reward_model(
         "trust_remote_code": True,
         "quantization_config": quantization_config,
         "device_map": "auto",
-        "max_memory": {0: gpu_memory, "cpu": cpu_memory},
+        "max_memory": max_memory_map(gpu_memory, cpu_memory),
     }
     if dtype_name != "auto":
         model_kwargs["torch_dtype"] = dtype_by_name[dtype_name]
@@ -87,7 +88,8 @@ def score_texts(
             truncation=True,
             max_length=max_length,
         )
-        inputs = {key: value.to(model.device) for key, value in inputs.items()}
+        device = model_input_device(model)
+        inputs = {key: value.to(device) for key, value in inputs.items()}
         with torch.inference_mode():
             logits = model(**inputs).logits
         batch_scores = logits.detach().float().view(logits.shape[0], -1)[:, 0].cpu()

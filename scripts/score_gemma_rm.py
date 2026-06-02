@@ -4,6 +4,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import pandas as pd
 
+from hardware_profiles import add_hardware_profile_argument, apply_profile_defaults
 from RM_LogisticRegression.rm_scoring import load_reward_model, score_dataframe
 from RM_LogisticRegression.paths import default_score_output_path
 
@@ -45,29 +46,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=2,
+        default=None,
         help="Inference batch size.",
     )
+    add_hardware_profile_argument(parser)
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Load model in 4bit with bitsandbytes. Disabled by default for 4090 bf16 inference.",
     )
     parser.add_argument(
         "--dtype",
         choices=["auto", "float16", "bfloat16"],
-        default="bfloat16",
+        default=None,
         help="Model compute dtype.",
     )
     parser.add_argument(
         "--gpu-memory",
-        default="23GiB",
-        help="Max memory for GPU 0 when using device_map=auto.",
+        default=None,
+        help="Max memory per visible GPU when using device_map=auto.",
     )
     parser.add_argument(
         "--cpu-memory",
-        default="48GiB",
+        default=None,
         help="Max CPU memory for device_map=auto offload.",
     )
     parser.add_argument(
@@ -87,7 +89,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip ids already present in the output CSV.",
     )
-    return parser.parse_args()
+    return apply_profile_defaults(parser.parse_args(), "rm_score")
 
 
 def main() -> None:
@@ -105,6 +107,7 @@ def main() -> None:
     print(f"  model: {args.model}")
     print(f"  limit: {args.limit if args.limit is not None else 'none'}")
     print(f"  max_length: {args.max_length}")
+    print(f"  hardware_profile: {args.hardware_profile} ({args.hardware_description})")
     print(f"  batch_size: {args.batch_size}")
     print(f"  load_in_4bit: {args.load_in_4bit}")
     print(f"  dtype: {args.dtype}")
