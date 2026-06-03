@@ -1,3 +1,10 @@
+import inspect
+import json
+import os
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+
 import torch
 from torch import nn
 
@@ -96,8 +103,49 @@ def load_tokenizer(model_path: str):
     return tokenizer
 
 
+@contextmanager
+def peft_adapter_with_supported_config(adapter_path: str, config_cls):
+    adapter_dir = Path(adapter_path)
+    config_path = adapter_dir / "adapter_config.json"
+    if not config_path.exists():
+        yield adapter_path
+        return
+
+    adapter_config = json.loads(config_path.read_text(encoding="utf-8"))
+    supported_keys = set(inspect.signature(config_cls.__init__).parameters)
+    supported_keys.discard("self")
+    filtered_config = {
+        key: value
+        for key, value in adapter_config.items()
+        if key in supported_keys or key == "peft_type"
+    }
+    removed_keys = sorted(set(adapter_config) - set(filtered_config))
+    if not removed_keys:
+        yield adapter_path
+        return
+
+    with tempfile.TemporaryDirectory(prefix="peft_adapter_") as tmp:
+        tmp_dir = Path(tmp)
+        for item in adapter_dir.iterdir():
+            target = tmp_dir / item.name
+            if item.name == "adapter_config.json":
+                continue
+            os.symlink(item.resolve(), target, target_is_directory=item.is_dir())
+        target_config_path = tmp_dir / "adapter_config.json"
+        target_config_path.write_text(
+            json.dumps(filtered_config, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            "  resume_adapter_config: ignored unsupported PEFT keys: "
+            + ", ".join(removed_keys)
+        )
+        yield str(tmp_dir)
+
+
 def load_gemma2_sequence_classifier(
     model_path: str,
+    resume_adapter: str | None,
     load_in_4bit: bool,
     dtype: str,
     lora_r: int,
@@ -110,7 +158,13 @@ def load_gemma2_sequence_classifier(
     head_dropout: float,
     head_hidden_ratio: float,
 ):
-    from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+    from peft import (
+        LoraConfig,
+        PeftModel,
+        TaskType,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
     from transformers import AutoConfig, AutoModelForSequenceClassification, BitsAndBytesConfig
 
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
@@ -162,14 +216,18 @@ def load_gemma2_sequence_classifier(
             use_gradient_checkpointing=gradient_checkpointing,
         )
 
-    lora_config = LoraConfig(
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        lora_dropout=lora_dropout,
-        bias="none",
-        task_type=TaskType.SEQ_CLS,
-        target_modules=target_modules,
-        modules_to_save=["score"],
-    )
-    model = get_peft_model(model, lora_config)
+    if resume_adapter is not None:
+        with peft_adapter_with_supported_config(resume_adapter, LoraConfig) as adapter_path:
+            model = PeftModel.from_pretrained(model, adapter_path, is_trainable=True)
+    else:
+        lora_config = LoraConfig(
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            bias="none",
+            task_type=TaskType.SEQ_CLS,
+            target_modules=target_modules,
+            modules_to_save=["score"],
+        )
+        model = get_peft_model(model, lora_config)
     return model

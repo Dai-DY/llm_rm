@@ -46,7 +46,6 @@ SCP_OPTS=(
 )
 UPLOAD_ITEMS=(
   "README.md"
-  "requirements.txt"
   "src"
   "scripts"
 )

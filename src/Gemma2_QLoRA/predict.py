@@ -16,7 +16,12 @@ from hardware_profiles import (
 from Gemma2_QLoRA.constants import DEFAULT_MODEL_PATH, LABEL_COLUMNS
 from Gemma2_QLoRA.data import DataCollatorForPreference, PreferenceDataset
 from Gemma2_QLoRA.metrics import softmax
-from Gemma2_QLoRA.modeling import maybe_disable_softcapping, replace_classification_head, torch_dtype
+from Gemma2_QLoRA.modeling import (
+    maybe_disable_softcapping,
+    peft_adapter_with_supported_config,
+    replace_classification_head,
+    torch_dtype,
+)
 from Gemma2_QLoRA.modeling import load_tokenizer
 
 
@@ -94,7 +99,7 @@ def apply_adapter_config_defaults(args: argparse.Namespace) -> argparse.Namespac
 
 
 def load_model(args: argparse.Namespace):
-    from peft import PeftModel
+    from peft import LoraConfig, PeftModel
     from transformers import AutoConfig, AutoModelForSequenceClassification, BitsAndBytesConfig
 
     config = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
@@ -131,7 +136,8 @@ def load_model(args: argparse.Namespace):
         dropout=args.head_dropout,
         hidden_ratio=args.head_hidden_ratio,
     )
-    model = PeftModel.from_pretrained(base, args.adapter)
+    with peft_adapter_with_supported_config(args.adapter, LoraConfig) as adapter_path:
+        model = PeftModel.from_pretrained(base, adapter_path)
     if not args.load_in_4bit and torch.cuda.is_available():
         model = model.to("cuda")
     model.eval()

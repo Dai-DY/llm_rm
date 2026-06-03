@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +49,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train", default="data/train_split.csv", help="Training CSV.")
     parser.add_argument("--valid", default="data/valid_split.csv", help="Validation CSV.")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output directory.")
+    parser.add_argument(
+        "--resume-adapter",
+        default=None,
+        help="Optional trained LoRA adapter directory to initialize from for another round.",
+    )
     parser.add_argument("--max-length", type=int, default=1800, help="Max token length.")
     parser.add_argument("--epochs", type=float, default=1.0, help="Number of train epochs.")
     parser.add_argument("--learning-rate", type=float, default=2e-4, help="Learning rate.")
@@ -68,19 +74,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--classifier-head",
         choices=["linear", "mlp"],
-        default="mlp",
+        default=None,
         help="Classification head placed on top of Gemma2 pooled hidden states.",
     )
     parser.add_argument(
         "--head-dropout",
         type=float,
-        default=0.1,
+        default=None,
         help="Dropout used by the MLP classification head.",
     )
     parser.add_argument(
         "--head-hidden-ratio",
         type=float,
-        default=0.5,
+        default=None,
         help="MLP hidden size as a fraction of Gemma2 hidden size.",
     )
     parser.add_argument(
@@ -131,7 +137,25 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Duplicate training rows with response A/B swapped.",
     )
-    return apply_profile_defaults(parser.parse_args(), "gemma_train")
+    return apply_resume_adapter_config_defaults(
+        apply_profile_defaults(parser.parse_args(), "gemma_train")
+    )
+
+
+def apply_resume_adapter_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    saved_config = {}
+    if args.resume_adapter is not None:
+        config_path = Path(args.resume_adapter) / "gemma2_qlora_config.json"
+        if config_path.exists():
+            saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    if args.classifier_head is None:
+        args.classifier_head = saved_config.get("classifier_head", "mlp")
+    if args.head_dropout is None:
+        args.head_dropout = float(saved_config.get("head_dropout", 0.1))
+    if args.head_hidden_ratio is None:
+        args.head_hidden_ratio = float(saved_config.get("head_hidden_ratio", 0.5))
+    return args
 
 
 def predict_probabilities(trainer, dataset: PreferenceDataset) -> tuple[np.ndarray, np.ndarray]:
@@ -183,6 +207,7 @@ def main() -> None:
     print("[stage 1/5] Load tokenizer")
     tokenizer = load_tokenizer(args.model)
     print(f"  model: {args.model}")
+    print(f"  resume_adapter: {args.resume_adapter}")
     print(f"  max_length: {args.max_length}")
     print(f"  hardware_profile: {args.hardware_profile} ({args.hardware_description})")
     print(f"  batch_size: {args.batch_size}")
@@ -232,6 +257,7 @@ def main() -> None:
     print("[stage 3/5] Load Gemma2 classifier with LoRA")
     model = load_gemma2_sequence_classifier(
         model_path=args.model,
+        resume_adapter=args.resume_adapter,
         load_in_4bit=args.load_in_4bit,
         dtype=args.dtype,
         lora_r=args.lora_r,

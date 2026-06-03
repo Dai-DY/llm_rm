@@ -7,7 +7,11 @@ from sklearn.metrics import log_loss
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from RM_LogisticRegression.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
+from RM_LogisticRegression.constants import (
+    LABEL_COLUMNS,
+    RM_BASE_FEATURE_COLUMNS,
+    RM_FEATURE_COLUMNS,
+)
 from RM_LogisticRegression.data import validate_one_hot_labels
 from RM_LogisticRegression.metrics import multiclass_accuracy
 
@@ -22,13 +26,15 @@ def read_joined_scores(
     validate_one_hot_labels(labels, labels_path)
 
     missing_features = [
-        column for column in ["id", *RM_FEATURE_COLUMNS] if column not in scores.columns
+        column
+        for column in ["id", *RM_BASE_FEATURE_COLUMNS]
+        if column not in scores.columns
     ]
     if missing_features:
         raise ValueError(f"{scores_path} is missing columns: {missing_features}")
 
     joined = labels[["id", *LABEL_COLUMNS]].merge(
-        scores[["id", *RM_FEATURE_COLUMNS]],
+        scores[["id", *RM_BASE_FEATURE_COLUMNS]],
         on="id",
         how="inner",
         validate="one_to_one",
@@ -39,7 +45,27 @@ def read_joined_scores(
         )
     if len(joined) == 0:
         raise ValueError(f"{scores_path} did not match any label rows.")
-    return joined
+    return add_derived_features(joined)
+
+
+def add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["score_sum"] = df["score_a"] + df["score_b"]
+    df["score_mean"] = df["score_sum"] / 2.0
+    df["score_product"] = df["score_a"] * df["score_b"]
+    df["score_max"] = df[["score_a", "score_b"]].max(axis=1)
+    df["score_min"] = df[["score_a", "score_b"]].min(axis=1)
+
+    df["response_len_abs_diff"] = df["response_len_diff"].abs()
+    df["response_len_sum"] = df["response_a_len"] + df["response_b_len"]
+    df["response_len_mean"] = df["response_len_sum"] / 2.0
+    df["response_len_ratio"] = (
+        (df["response_a_len"] + 1.0) / (df["response_b_len"] + 1.0)
+    )
+    df["log_prompt_len"] = np.log1p(df["prompt_len"].clip(lower=0))
+    df["log_response_a_len"] = np.log1p(df["response_a_len"].clip(lower=0))
+    df["log_response_b_len"] = np.log1p(df["response_b_len"].clip(lower=0))
+    return df
 
 
 def labels_to_class_ids(df: pd.DataFrame) -> np.ndarray:
@@ -62,6 +88,7 @@ def augment_with_swapped_responses(df: pd.DataFrame, seed: int) -> pd.DataFrame:
     swapped["response_b_len"] = df["response_a_len"].to_numpy()
     swapped["response_len_diff"] = -df["response_len_diff"].to_numpy()
     swapped["prompt_len"] = df["prompt_len"].to_numpy()
+    swapped = add_derived_features(swapped)
 
     augmented = pd.concat([df, swapped], ignore_index=True)
     return augmented.sample(frac=1.0, random_state=seed).reset_index(drop=True)

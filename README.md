@@ -191,12 +191,31 @@ PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
   --learning-rate 2e-4
 ```
 
+Continue from a previous trained adapter for another fine-tuning round:
+
+```bash
+PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
+  --hardware-profile 4090 \
+  --train data/train_split.csv \
+  --valid data/valid_split.csv \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --resume-adapter output/gemma2_qlora_rm/adapter \
+  --output-dir output/gemma2_qlora_rm_round2 \
+  --max-length 1800 \
+  --batch-size 2 \
+  --eval-batch-size 2 \
+  --gradient-accumulation-steps 8 \
+  --epochs 1 \
+  --learning-rate 5e-5
+```
+
 Parameters:
 
 - `--model`: local Gemma2 RM path. Recommended: `models/sfairXC__FsfairX-Gemma2-RM-v0.1`.
 - `--train`: training split. Recommended: `data/train_split.csv`.
 - `--valid`: validation split. Recommended: `data/valid_split.csv`.
 - `--output-dir`: output directory for checkpoints, adapter, and validation predictions.
+- `--resume-adapter`: optional previous `adapter/` directory to initialize from for another fine-tuning round. Keep `--model` pointed at the original base model and write to a new `--output-dir`.
 - `--hardware-profile`: `auto`, `4090`, or `h20x2`. Recommended: `auto`; use `h20x2` with `torchrun --nproc_per_node 2`.
 - `--max-length`: token truncation length. Recommended: `1800`; lower to `1536` or `1024` if OOM.
 - `--batch-size`: per-device train batch size. Profile defaults: 4090=`2`, h20x2=`8`.
@@ -421,6 +440,15 @@ Parameters:
 - `--augment-swapped` / `--no-augment-swapped`: duplicate training rows with A/B swapped. Enabled by default.
 - `--shuffle-seed`: seed used to shuffle original and swapped rows together. Recommended: `42`.
 
+The calibrators read the original RM score columns from disk, then add derived
+features in memory:
+
+```text
+score_sum, score_mean, score_product, score_max, score_min
+response_len_abs_diff, response_len_sum, response_len_mean, response_len_ratio
+log_prompt_len, log_response_a_len, log_response_b_len
+```
+
 Swapped augmentation creates one reversed training row for each original row:
 
 ```text
@@ -448,4 +476,77 @@ log_loss
 manual_log_loss
 accuracy
 rows
+```
+
+### `scripts/train_rm_mlp_calibrator.py`
+
+Trains a small MLP calibrator on the same RM score and length features. This is
+separate from the Logistic Regression baseline, uses AdamW weight decay, and
+stops early when validation loss stops improving.
+
+Recommended command:
+
+```bash
+python scripts/train_rm_mlp_calibrator.py \
+  --run-name $RUN_NAME \
+  --hidden-dim 32 \
+  --dropout 0.1 \
+  --learning-rate 1e-3 \
+  --weight-decay 1e-2 \
+  --batch-size 512 \
+  --max-epochs 300 \
+  --patience 5
+```
+
+Additional parameters:
+
+- `--min-delta`: minimum validation-loss improvement to reset early stopping.
+- `--device`: `auto`, `cpu`, `cuda`, or a CUDA device such as `cuda:0`.
+
+Outputs:
+
+```text
+output/<RUN_NAME>/RM_LogisticRegression/rm_mlp_calibrated_valid_predictions.csv
+output/<RUN_NAME>/RM_LogisticRegression/rm_mlp_calibrator.pt
+```
+
+### `scripts/search_rm_mlp_hparams.py`
+
+Runs a grid search over MLP calibrator hyperparameters and saves the best
+validation predictions/checkpoint.
+
+Recommended quick search:
+
+```bash
+python scripts/search_rm_mlp_hparams.py \
+  --run-name $RUN_NAME \
+  --hidden-dims 16,32,64 \
+  --dropouts 0.05,0.1 \
+  --learning-rates 0.0005,0.001 \
+  --weight-decays 0.001,0.003,0.01 \
+  --batch-sizes 512 \
+  --max-epochs 500 \
+  --patience 10
+```
+
+Use a smaller grid for debugging:
+
+```bash
+python scripts/search_rm_mlp_hparams.py \
+  --run-name $RUN_NAME \
+  --hidden-dims 32 \
+  --dropouts 0.1 \
+  --learning-rates 0.001 \
+  --weight-decays 0.003 \
+  --batch-sizes 512 \
+  --max-epochs 20 \
+  --patience 3
+```
+
+Outputs:
+
+```text
+output/<RUN_NAME>/RM_LogisticRegression/rm_mlp_hparam_search_results.csv
+output/<RUN_NAME>/RM_LogisticRegression/rm_mlp_hparam_best_valid_predictions.csv
+output/<RUN_NAME>/RM_LogisticRegression/rm_mlp_hparam_best_model.pt
 ```
