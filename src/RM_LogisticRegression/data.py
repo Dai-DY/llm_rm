@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from RM_LogisticRegression.constants import LABEL_COLUMNS
@@ -34,10 +35,19 @@ def validate_one_hot_labels(df: pd.DataFrame, path: Path | None = None) -> None:
         location = f"{path} " if path is not None else ""
         raise ValueError(f"{location}is missing label columns: {missing}")
 
-    row_sums = df[LABEL_COLUMNS].sum(axis=1)
-    if not (row_sums == 1).all():
-        bad_count = int((row_sums != 1).sum())
-        raise ValueError(f"Expected one-hot labels; found {bad_count} invalid rows.")
+    labels = df[LABEL_COLUMNS].to_numpy(dtype=np.float64)
+    if not np.isfinite(labels).all():
+        raise ValueError("Labels contain NaN or infinite values.")
+    if (labels < 0).any():
+        raise ValueError("Labels contain negative probabilities.")
+
+    row_sums = labels.sum(axis=1)
+    if not np.allclose(row_sums, 1.0, atol=1e-4):
+        bad_count = int((np.abs(row_sums - 1.0) > 1e-4).sum())
+        raise ValueError(
+            "Expected label probabilities to sum to 1; "
+            f"found {bad_count} invalid rows."
+        )
 
 
 def label_names(df: pd.DataFrame) -> pd.Series:
@@ -61,4 +71,3 @@ def read_required_columns(path: Path, columns: list[str]) -> pd.DataFrame:
     if missing:
         raise ValueError(f"{path} is missing columns: {missing}")
     return df
-

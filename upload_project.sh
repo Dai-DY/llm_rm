@@ -45,6 +45,7 @@ SCP_OPTS=(
   -o ControlPersist=10m
 )
 UPLOAD_ITEMS=(
+  "data"
   "README.md"
   "src"
   "scripts"

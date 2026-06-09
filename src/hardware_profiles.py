@@ -50,6 +50,43 @@ PROFILES = {
             },
         },
     ),
+    "h20": HardwareProfile(
+        name="h20",
+        description="Single NVIDIA H20 GPU",
+        defaults={
+            "gemma_train": {
+                "batch_size": 8,
+                "eval_batch_size": 8,
+                "gradient_accumulation_steps": 2,
+                "dtype": "bfloat16",
+                "load_in_4bit": False,
+            },
+            "gemma_predict": {
+                "batch_size": 8,
+                "dtype": "bfloat16",
+                "load_in_4bit": False,
+            },
+            "qwen_train": {
+                "batch_size": 16,
+                "eval_batch_size": 16,
+                "gradient_accumulation_steps": 1,
+                "dtype": "bfloat16",
+                "load_in_4bit": False,
+            },
+            "qwen_predict": {
+                "batch_size": 16,
+                "dtype": "bfloat16",
+                "load_in_4bit": False,
+            },
+            "rm_score": {
+                "batch_size": 8,
+                "dtype": "bfloat16",
+                "load_in_4bit": False,
+                "gpu_memory": "90GiB",
+                "cpu_memory": "96GiB",
+            },
+        },
+    ),
     "h20x2": HardwareProfile(
         name="h20x2",
         description="Two NVIDIA H20 GPUs with torchrun/DDP for training",
@@ -101,8 +138,11 @@ def detect_hardware_profile() -> str:
 
     device_count = torch.cuda.device_count()
     names = [torch.cuda.get_device_name(index).lower() for index in range(device_count)]
-    if device_count >= 2 and any("h20" in name for name in names):
+    h20_count = sum("h20" in name for name in names)
+    if h20_count >= 2:
         return "h20x2"
+    if h20_count == 1 and device_count == 1:
+        return "h20"
     return "4090"
 
 
@@ -111,7 +151,7 @@ def add_hardware_profile_argument(parser) -> None:
         "--hardware-profile",
         choices=["auto", *PROFILES.keys()],
         default="auto",
-        help="Hardware defaults to use. auto detects 4090 single GPU or H20 dual GPU.",
+        help="Hardware defaults to use. auto detects 4090, single H20, or dual H20.",
     )
 
 

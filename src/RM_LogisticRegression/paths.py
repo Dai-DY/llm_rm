@@ -34,6 +34,26 @@ def default_mlp_calibrator_model_path(run_name: str | None = None) -> Path:
     return run_output_dir(run_name) / "rm_mlp_calibrator.pt"
 
 
+def default_prototype_calibrator_output_path(run_name: str | None = None) -> Path:
+    return run_output_dir(run_name) / "rm_prototype_calibrated_valid_predictions.csv"
+
+
+def default_prototype_calibrator_model_path(run_name: str | None = None) -> Path:
+    return run_output_dir(run_name) / "rm_prototype_calibrator.pt"
+
+
+def default_prototype_search_results_path(run_name: str | None = None) -> Path:
+    return run_output_dir(run_name) / "rm_prototype_hparam_search_results.csv"
+
+
+def default_prototype_search_best_output_path(run_name: str | None = None) -> Path:
+    return run_output_dir(run_name) / "rm_prototype_hparam_best_valid_predictions.csv"
+
+
+def default_prototype_search_best_model_path(run_name: str | None = None) -> Path:
+    return run_output_dir(run_name) / "rm_prototype_hparam_best_model.pt"
+
+
 def default_mlp_search_results_path(run_name: str | None = None) -> Path:
     return run_output_dir(run_name) / "rm_mlp_hparam_search_results.csv"
 

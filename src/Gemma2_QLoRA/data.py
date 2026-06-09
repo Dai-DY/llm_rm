@@ -72,6 +72,7 @@ class PreferenceExample:
     row_id: str
     text: str
     label: int | None
+    swapped_text: str | None = None
 
 
 class PreferenceDataset:
@@ -84,6 +85,7 @@ class PreferenceDataset:
         has_labels: bool = True,
         swap_augmentation: bool = False,
         swap_inputs: bool = False,
+        include_swapped_features: bool = False,
     ) -> None:
         df = pd.read_csv(csv_path)
         if limit is not None:
@@ -111,6 +113,15 @@ class PreferenceDataset:
                     row["response_b"],
                 ),
                 label=label_id(row) if has_labels else None,
+                swapped_text=(
+                    build_compact_pair_text(
+                        row["prompt"],
+                        row["response_b"],
+                        row["response_a"],
+                    )
+                    if include_swapped_features
+                    else None
+                ),
             )
             for _, row in df.iterrows()
         ]
@@ -131,6 +142,15 @@ class PreferenceDataset:
         )
         item = dict(encoded)
         item["id"] = example.row_id
+        if example.swapped_text is not None:
+            swapped_encoded = self.tokenizer(
+                example.swapped_text,
+                truncation=True,
+                max_length=self.max_length,
+                padding=False,
+            )
+            item["swap_input_ids"] = swapped_encoded["input_ids"]
+            item["swap_attention_mask"] = swapped_encoded["attention_mask"]
         if self.has_labels:
             item["labels"] = example.label
         return item
@@ -147,6 +167,15 @@ class DataCollatorForPreference:
         labels = None
         if "labels" in features[0]:
             labels = torch.tensor([feature.pop("labels") for feature in features])
+        swapped_features = None
+        if "swap_input_ids" in features[0]:
+            swapped_features = [
+                {
+                    "input_ids": feature.pop("swap_input_ids"),
+                    "attention_mask": feature.pop("swap_attention_mask"),
+                }
+                for feature in features
+            ]
 
         batch = self.tokenizer.pad(
             features,
@@ -156,5 +185,12 @@ class DataCollatorForPreference:
         batch["id"] = ids
         if labels is not None:
             batch["labels"] = labels
+        if swapped_features is not None:
+            swapped_batch = self.tokenizer.pad(
+                swapped_features,
+                padding=True,
+                return_tensors="pt",
+            )
+            batch["swap_input_ids"] = swapped_batch["input_ids"]
+            batch["swap_attention_mask"] = swapped_batch["attention_mask"]
         return batch
-

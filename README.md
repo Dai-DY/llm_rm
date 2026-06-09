@@ -41,8 +41,9 @@ conda activate deepl
 
 All GPU-heavy training and evaluation scripts support hardware profiles:
 
-- `--hardware-profile auto`: default; detects H20 dual GPU when at least two visible CUDA devices include `H20`, otherwise uses 4090 defaults.
+- `--hardware-profile auto`: default; detects dual H20 when at least two visible CUDA devices include `H20`, detects single H20 when exactly one visible CUDA device includes `H20`, otherwise uses 4090 defaults.
 - `--hardware-profile 4090`: RTX 4090 24GB single-GPU defaults.
+- `--hardware-profile h20`: one H20 GPU. Use `CUDA_VISIBLE_DEVICES=0` to run on the first physical GPU.
 - `--hardware-profile h20x2`: two H20 GPUs. Use `torchrun --nproc_per_node 2` for LoRA training.
 
 Profiles only fill defaults. Explicit values such as `--batch-size`, `--eval-batch-size`, `--gradient-accumulation-steps`, `--dtype`, `--load-in-4bit`, and `--gpu-memory` still override the profile.
@@ -75,6 +76,20 @@ PYTHONPATH=src torchrun --nproc_per_node 2 src/Gemma2_QLoRA/train.py \
   --valid data/valid_split.csv \
   --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
   --output-dir output/gemma2_qlora_rm_h20x2 \
+  --max-length 1800 \
+  --epochs 1 \
+  --learning-rate 2e-4
+```
+
+H20 single-card run on the first GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
+  --hardware-profile h20 \
+  --train data/train_split.csv \
+  --valid data/valid_split.csv \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --output-dir output/gemma2_qlora_rm_h20 \
   --max-length 1800 \
   --epochs 1 \
   --learning-rate 2e-4
@@ -151,6 +166,37 @@ Parameters:
 - `--allow-partial`: evaluate matched ids only. Recommended only for partial/debug predictions.
 - `--clip`: probability clipping epsilon. Recommended: default `1e-15`.
 
+### `scripts/extract_prediction_errors.py`
+
+Extracts wrong validation predictions from Gemma2 LoRA output and builds a
+second-round training CSV from all extracted errors plus sampled correct rows.
+
+Recommended command:
+
+```bash
+python scripts/extract_prediction_errors.py \
+  --labels data/valid_split.csv \
+  --predictions output/gemma2_qlora_rm/gemma2_qlora_valid_predictions.csv \
+  --error-csv output/gemma2_qlora_rm/gemma2_qlora_error_examples.csv \
+  --round2-output data/gemma2_qlora_rm_round2_train.csv \
+  --num-correct same \
+  --correct-sample-seed 42
+```
+
+Outputs:
+
+- `--error-csv`: misclassified rows with true labels, predicted probabilities,
+  predicted labels, confidence, and true-class loss.
+- `--round2-output`: training-format CSV containing the misclassified rows plus
+  sampled correctly classified rows.
+
+Parameters:
+
+- `--num-correct`: number of correct rows to add. Use an integer, `same` to add
+  the same count as extracted errors, or `all` to add all correct rows.
+- `--limit`: optional cap on how many error rows to include.
+- `--sort-by`: selects which errors are kept first when `--limit` is set.
+
 ## Gemma2 LoRA Scripts
 
 ### `src/Gemma2_QLoRA/train.py`
@@ -191,6 +237,25 @@ PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
   --learning-rate 2e-4
 ```
 
+Representation-aware run with A/B swap consistency and online class prototypes:
+
+```bash
+PYTHONPATH=src python src/Gemma2_QLoRA/train.py \
+  --hardware-profile 4090 \
+  --train data/train_split.csv \
+  --valid data/valid_split.csv \
+  --model models/sfairXC__FsfairX-Gemma2-RM-v0.1 \
+  --output-dir output/gemma2_qlora_rm_repr \
+  --max-length 1800 \
+  --batch-size 2 \
+  --eval-batch-size 2 \
+  --gradient-accumulation-steps 8 \
+  --epochs 1 \
+  --learning-rate 1e-4 \
+  --swap-consistency-weight 0.05 \
+  --prototype-loss-weight 0.02
+```
+
 Continue from a previous trained adapter for another fine-tuning round:
 
 ```bash
@@ -216,11 +281,11 @@ Parameters:
 - `--valid`: validation split. Recommended: `data/valid_split.csv`.
 - `--output-dir`: output directory for checkpoints, adapter, and validation predictions.
 - `--resume-adapter`: optional previous `adapter/` directory to initialize from for another fine-tuning round. Keep `--model` pointed at the original base model and write to a new `--output-dir`.
-- `--hardware-profile`: `auto`, `4090`, or `h20x2`. Recommended: `auto`; use `h20x2` with `torchrun --nproc_per_node 2`.
+- `--hardware-profile`: `auto`, `4090`, `h20`, or `h20x2`. Recommended: `auto`; prefix the command with `CUDA_VISIBLE_DEVICES=0` and pass `--hardware-profile h20` for first-card single H20, or use `h20x2` with `torchrun --nproc_per_node 2`.
 - `--max-length`: token truncation length. Recommended: `1800`; lower to `1536` or `1024` if OOM.
-- `--batch-size`: per-device train batch size. Profile defaults: 4090=`2`, h20x2=`8`.
-- `--eval-batch-size`: per-device eval batch size. Profile defaults: 4090=`2`, h20x2=`8`.
-- `--gradient-accumulation-steps`: profile defaults: 4090=`8`, h20x2=`2`, giving effective batch `16` on 4090 and `32` on H20 dual GPU.
+- `--batch-size`: per-device train batch size. Profile defaults: 4090=`2`, h20=`8`, h20x2=`8`.
+- `--eval-batch-size`: per-device eval batch size. Profile defaults: 4090=`2`, h20=`8`, h20x2=`8`.
+- `--gradient-accumulation-steps`: profile defaults: 4090=`8`, h20=`2`, h20x2=`2`, giving effective batch `16` on 4090/single H20 and `32` on H20 dual GPU.
 - `--epochs`: training epochs. Recommended: `1` first, then try `2`.
 - `--learning-rate`: LoRA learning rate. Recommended: `2e-4`; try `1e-4` if unstable.
 - `--dtype`: model dtype. Recommended: `bfloat16`.
@@ -234,6 +299,10 @@ Parameters:
 - `--head-hidden-ratio`: MLP hidden size ratio. Recommended: `0.5`.
 - `--disable-softcapping`: disable Gemma2 softcapping. Recommended: enabled.
 - `--swap-augmentation`: duplicate training rows with A/B swapped. Recommended: enabled.
+- `--swap-consistency-weight`: symmetric KL loss weight between original predictions and A/B-swapped predictions after restoring A/B columns. Recommended first try: `0.03` to `0.08`.
+- `--swap-ce-weight`: optional extra CE loss on swapped inputs with swapped labels. Recommended first try: `0.0`; use only if consistency alone is weak.
+- `--prototype-loss-weight`: cosine center-loss weight that pulls pooled hidden states toward online A/B/tie class prototypes. Recommended first try: `0.01` to `0.03`.
+- `--prototype-momentum`: EMA momentum for online class prototypes. Recommended: `0.95`.
 - `--valid-tta`: average validation predictions with A/B-flipped TTA. Recommended: enabled.
 - `--eval-steps`: validation frequency. Recommended: `200`.
 - `--save-steps`: checkpoint frequency. Recommended: `200`.
@@ -268,9 +337,9 @@ Parameters:
 - `--adapter`: trained adapter directory. Recommended: `output/gemma2_qlora_rm/adapter`.
 - `--input`: CSV to predict. Use `data/test.csv` for submission.
 - `--output`: output probability CSV.
-- `--hardware-profile`: `auto`, `4090`, or `h20x2`.
+- `--hardware-profile`: `auto`, `4090`, `h20`, or `h20x2`.
 - `--max-length`: token truncation length. Use the training value, recommended `1800`.
-- `--batch-size`: inference batch size. Profile defaults: 4090=`2`, h20x2=`8`.
+- `--batch-size`: inference batch size. Profile defaults: 4090=`2`, h20=`8`, h20x2=`8`.
 - `--has-labels`: set when predicting validation CSVs that include labels.
 - `--tta`: A/B flip test-time augmentation. Recommended: enabled.
 - `--dtype`: model dtype. Recommended: `bfloat16`.
@@ -308,11 +377,11 @@ Parameters:
 - `--model`: local Qwen path. Recommended: `models/Qwen__Qwen2.5-3B-Instruct`.
 - `--train`, `--valid`: train and validation split CSVs.
 - `--output-dir`: output directory.
-- `--hardware-profile`: `auto`, `4090`, or `h20x2`. Use `h20x2` with `torchrun --nproc_per_node 2`.
+- `--hardware-profile`: `auto`, `4090`, `h20`, or `h20x2`. Prefix the command with `CUDA_VISIBLE_DEVICES=0` and pass `--hardware-profile h20` for first-card single H20, or use `h20x2` with `torchrun --nproc_per_node 2`.
 - `--max-length`: token truncation length. Recommended: `1800`.
-- `--batch-size`: per-device train batch. Profile defaults: 4090=`4`, h20x2=`16`.
-- `--eval-batch-size`: per-device eval batch. Profile defaults: 4090=`4`, h20x2=`16`.
-- `--gradient-accumulation-steps`: profile defaults: 4090=`4`, h20x2=`1`.
+- `--batch-size`: per-device train batch. Profile defaults: 4090=`4`, h20=`16`, h20x2=`16`.
+- `--eval-batch-size`: per-device eval batch. Profile defaults: 4090=`4`, h20=`16`, h20x2=`16`.
+- `--gradient-accumulation-steps`: profile defaults: 4090=`4`, h20=`1`, h20x2=`1`.
 - `--epochs`: recommended `1` first.
 - `--learning-rate`: recommended `2e-4`.
 - `--dtype`: recommended `bfloat16`.
@@ -353,9 +422,9 @@ Parameters:
 - `--adapter`: trained adapter directory.
 - `--input`: CSV to predict.
 - `--output`: output probability CSV.
-- `--hardware-profile`: `auto`, `4090`, or `h20x2`.
+- `--hardware-profile`: `auto`, `4090`, `h20`, or `h20x2`.
 - `--max-length`: use the training value, recommended `1800`.
-- `--batch-size`: inference batch size. Profile defaults: 4090=`4`, h20x2=`16`.
+- `--batch-size`: inference batch size. Profile defaults: 4090=`4`, h20=`16`, h20x2=`16`.
 - `--has-labels`: set for validation CSVs.
 - `--dtype`: recommended `bfloat16`.
 - `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
@@ -403,12 +472,12 @@ Parameters:
 - `--input`: split CSV to score.
 - `--output`: explicit score CSV path. Usually leave unset.
 - `--run-name`: output folder name. Use one shared value for train and valid scores.
-- `--hardware-profile`: `auto`, `4090`, or `h20x2`.
+- `--hardware-profile`: `auto`, `4090`, `h20`, or `h20x2`.
 - `--max-length`: token truncation length. Recommended: `512` for fast RM scoring.
-- `--batch-size`: inference batch size. Profile defaults: 4090=`2`, h20x2=`8`.
+- `--batch-size`: inference batch size. Profile defaults: 4090=`2`, h20=`8`, h20x2=`8`.
 - `--dtype`: recommended `bfloat16`.
-- `--gpu-memory`: max memory per visible GPU for device map. Profile defaults: 4090=`23GiB`, h20x2=`90GiB`.
-- `--cpu-memory`: CPU offload memory. Profile defaults: 4090=`48GiB`, h20x2=`96GiB`.
+- `--gpu-memory`: max memory per visible GPU for device map. Profile defaults: 4090=`23GiB`, h20=`90GiB`, h20x2=`90GiB`.
+- `--cpu-memory`: CPU offload memory. Profile defaults: 4090=`48GiB`, h20=`96GiB`, h20x2=`96GiB`.
 - `--load-in-4bit`: optional quantized loading. Recommended: leave disabled on 4090.
 - `--limit`: optional row limit. Recommended: unset for full scores.
 - `--save-every`: checkpoint interval. Recommended: `100`.

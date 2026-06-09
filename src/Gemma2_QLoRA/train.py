@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 
 from hardware_profiles import add_hardware_profile_argument, apply_profile_defaults
 from Gemma2_QLoRA.constants import DEFAULT_MODEL_PATH, DEFAULT_OUTPUT_DIR, LABEL_COLUMNS
@@ -39,6 +40,176 @@ def trainer_compute_metrics(eval_pred) -> dict[str, float]:
     logits = getattr(eval_pred, "predictions", eval_pred[0])
     labels = getattr(eval_pred, "label_ids", eval_pred[1])
     return {"log_loss": multiclass_log_loss(labels, softmax(logits))}
+
+
+def swap_label_ids(labels: torch.Tensor) -> torch.Tensor:
+    swapped = labels.clone()
+    swapped = torch.where(labels == 0, torch.ones_like(swapped), swapped)
+    swapped = torch.where(labels == 1, torch.zeros_like(swapped), swapped)
+    return swapped
+
+
+def restore_swapped_logits(logits: torch.Tensor) -> torch.Tensor:
+    return logits[:, [1, 0, 2]]
+
+
+def pooled_last_hidden(outputs, attention_mask: torch.Tensor) -> torch.Tensor:
+    hidden_states = outputs.hidden_states[-1]
+    sequence_lengths = attention_mask.sum(dim=1).to(hidden_states.device) - 1
+    batch_indices = torch.arange(hidden_states.size(0), device=hidden_states.device)
+    return hidden_states[batch_indices, sequence_lengths]
+
+
+class RepresentationPreferenceTrainer:
+    def __init__(
+        self,
+        *,
+        swap_consistency_weight: float,
+        swap_ce_weight: float,
+        prototype_loss_weight: float,
+        prototype_momentum: float,
+    ) -> None:
+        self.swap_consistency_weight = swap_consistency_weight
+        self.swap_ce_weight = swap_ce_weight
+        self.prototype_loss_weight = prototype_loss_weight
+        self.prototype_momentum = prototype_momentum
+        self.class_prototypes = None
+        self.prototype_initialized = None
+
+    def _ensure_prototypes(self, hidden: torch.Tensor) -> None:
+        if self.class_prototypes is not None:
+            return
+        self.class_prototypes = torch.zeros(
+            len(LABEL_COLUMNS),
+            hidden.size(-1),
+            device=hidden.device,
+            dtype=hidden.dtype,
+        )
+        self.prototype_initialized = torch.zeros(
+            len(LABEL_COLUMNS),
+            device=hidden.device,
+            dtype=torch.bool,
+        )
+
+    def _prototype_loss(
+        self,
+        hidden: torch.Tensor,
+        labels: torch.Tensor,
+        update_prototypes: bool,
+    ) -> torch.Tensor:
+        self._ensure_prototypes(hidden)
+        hidden_norm = F.normalize(hidden.float(), dim=-1)
+        prototypes = self.class_prototypes.to(device=hidden.device, dtype=torch.float32)
+        initialized = self.prototype_initialized.to(device=hidden.device)
+        valid = initialized[labels]
+
+        if valid.any():
+            target = prototypes[labels[valid]]
+            loss = 1.0 - (hidden_norm[valid] * target).sum(dim=-1)
+            prototype_loss = loss.mean()
+        else:
+            prototype_loss = hidden_norm.new_zeros(())
+
+        if update_prototypes:
+            with torch.no_grad():
+                for class_id in range(len(LABEL_COLUMNS)):
+                    class_mask = labels == class_id
+                    if not class_mask.any():
+                        continue
+                    class_mean = F.normalize(hidden_norm[class_mask].mean(dim=0), dim=0)
+                    if initialized[class_id]:
+                        updated = (
+                            self.prototype_momentum * prototypes[class_id]
+                            + (1.0 - self.prototype_momentum) * class_mean
+                        )
+                        prototypes[class_id] = F.normalize(updated, dim=0)
+                    else:
+                        prototypes[class_id] = class_mean
+                        initialized[class_id] = True
+                self.class_prototypes.copy_(prototypes.to(dtype=self.class_prototypes.dtype))
+                self.prototype_initialized.copy_(initialized)
+
+        return prototype_loss
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.get("labels")
+        swap_input_ids = inputs.pop("swap_input_ids", None)
+        swap_attention_mask = inputs.pop("swap_attention_mask", None)
+
+        need_hidden = self.prototype_loss_weight > 0.0
+        outputs = model(**inputs, output_hidden_states=need_hidden)
+        loss = outputs.loss
+        metrics = {}
+
+        if (
+            (self.swap_consistency_weight > 0.0 or self.swap_ce_weight > 0.0)
+            and swap_input_ids is not None
+            and swap_attention_mask is not None
+        ):
+            swapped_outputs = model(
+                input_ids=swap_input_ids,
+                attention_mask=swap_attention_mask,
+            )
+            if self.swap_consistency_weight > 0.0:
+                restored_swapped_logits = restore_swapped_logits(swapped_outputs.logits)
+                original_log_probs = F.log_softmax(outputs.logits.float(), dim=-1)
+                original_probs = original_log_probs.exp()
+                restored_log_probs = F.log_softmax(restored_swapped_logits.float(), dim=-1)
+                restored_probs = restored_log_probs.exp()
+                consistency_loss = 0.5 * (
+                    F.kl_div(original_log_probs, restored_probs, reduction="batchmean")
+                    + F.kl_div(restored_log_probs, original_probs, reduction="batchmean")
+                )
+                loss = loss + self.swap_consistency_weight * consistency_loss
+                metrics["swap_consistency_loss"] = consistency_loss.detach()
+
+            if self.swap_ce_weight > 0.0 and labels is not None:
+                swapped_ce_loss = F.cross_entropy(
+                    swapped_outputs.logits.float(),
+                    swap_label_ids(labels).to(swapped_outputs.logits.device),
+                )
+                loss = loss + self.swap_ce_weight * swapped_ce_loss
+                metrics["swap_ce_loss"] = swapped_ce_loss.detach()
+
+        if self.prototype_loss_weight > 0.0 and labels is not None:
+            hidden = pooled_last_hidden(outputs, inputs["attention_mask"])
+            prototype_loss = self._prototype_loss(
+                hidden,
+                labels.to(hidden.device),
+                update_prototypes=model.training,
+            )
+            loss = loss + self.prototype_loss_weight * prototype_loss
+            metrics["prototype_loss"] = prototype_loss.detach()
+
+        if metrics:
+            self.log({key: value.item() for key, value in metrics.items()})
+
+        if return_outputs:
+            return loss, {"logits": outputs.logits}
+        return loss
+
+
+def make_preference_trainer_cls(trainer_cls):
+    class Gemma2PreferenceTrainer(RepresentationPreferenceTrainer, trainer_cls):
+        def __init__(
+            self,
+            *args,
+            swap_consistency_weight: float,
+            swap_ce_weight: float,
+            prototype_loss_weight: float,
+            prototype_momentum: float,
+            **kwargs,
+        ):
+            RepresentationPreferenceTrainer.__init__(
+                self,
+                swap_consistency_weight=swap_consistency_weight,
+                swap_ce_weight=swap_ce_weight,
+                prototype_loss_weight=prototype_loss_weight,
+                prototype_momentum=prototype_momentum,
+            )
+            trainer_cls.__init__(self, *args, **kwargs)
+
+    return Gemma2PreferenceTrainer
 
 
 def parse_args() -> argparse.Namespace:
@@ -137,6 +308,30 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Duplicate training rows with response A/B swapped.",
     )
+    parser.add_argument(
+        "--swap-consistency-weight",
+        type=float,
+        default=0.0,
+        help="Symmetric KL weight between original predictions and restored A/B-swapped predictions.",
+    )
+    parser.add_argument(
+        "--swap-ce-weight",
+        type=float,
+        default=0.0,
+        help="Optional CE weight on A/B-swapped inputs with swapped labels.",
+    )
+    parser.add_argument(
+        "--prototype-loss-weight",
+        type=float,
+        default=0.0,
+        help="Cosine center-loss weight that pulls pooled hidden states toward class prototypes.",
+    )
+    parser.add_argument(
+        "--prototype-momentum",
+        type=float,
+        default=0.95,
+        help="EMA momentum for online class prototypes.",
+    )
     return apply_resume_adapter_config_defaults(
         apply_profile_defaults(parser.parse_args(), "gemma_train")
     )
@@ -220,6 +415,10 @@ def main() -> None:
     print(f"  classifier_head: {args.classifier_head}")
     print(f"  head_dropout: {args.head_dropout}")
     print(f"  head_hidden_ratio: {args.head_hidden_ratio}")
+    print(f"  swap_consistency_weight: {args.swap_consistency_weight}")
+    print(f"  swap_ce_weight: {args.swap_ce_weight}")
+    print(f"  prototype_loss_weight: {args.prototype_loss_weight}")
+    print(f"  prototype_momentum: {args.prototype_momentum}")
 
     print("[stage 2/5] Build datasets")
     train_dataset = PreferenceDataset(
@@ -229,6 +428,7 @@ def main() -> None:
         limit=args.limit_train,
         has_labels=True,
         swap_augmentation=args.swap_augmentation,
+        include_swapped_features=args.swap_consistency_weight > 0.0 or args.swap_ce_weight > 0.0,
     )
     valid_dataset = PreferenceDataset(
         csv_path=args.valid,
@@ -300,7 +500,12 @@ def main() -> None:
         seed=args.seed,
     )
 
-    trainer = Trainer(
+    trainer_cls = make_preference_trainer_cls(Trainer)
+    trainer = trainer_cls(
+        swap_consistency_weight=args.swap_consistency_weight,
+        swap_ce_weight=args.swap_ce_weight,
+        prototype_loss_weight=args.prototype_loss_weight,
+        prototype_momentum=args.prototype_momentum,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -323,6 +528,10 @@ def main() -> None:
         f'  "head_dropout": {args.head_dropout},\n'
         f'  "head_hidden_ratio": {args.head_hidden_ratio},\n'
         f'  "disable_softcapping": {str(args.disable_softcapping).lower()},\n'
+        f'  "swap_consistency_weight": {args.swap_consistency_weight},\n'
+        f'  "swap_ce_weight": {args.swap_ce_weight},\n'
+        f'  "prototype_loss_weight": {args.prototype_loss_weight},\n'
+        f'  "prototype_momentum": {args.prototype_momentum},\n'
         f'  "hardware_profile": "{args.hardware_profile}"\n'
         "}\n",
         encoding="utf-8",
