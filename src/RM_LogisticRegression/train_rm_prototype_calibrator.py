@@ -1,31 +1,30 @@
 import argparse
 from pathlib import Path
 
-import _bootstrap  # noqa: F401
 import torch
 
 from RM_LogisticRegression.calibration import read_joined_scores
-from RM_LogisticRegression.mlp_calibration import train_mlp_calibrator
 from RM_LogisticRegression.paths import (
     default_calibrator_output_path,
-    default_mlp_calibrator_model_path,
-    default_mlp_calibrator_output_path,
+    default_prototype_calibrator_model_path,
+    default_prototype_calibrator_output_path,
 )
+from RM_LogisticRegression.prototype_calibration import train_prototype_calibrator
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a three-class MLP calibrator on Gemma2 RM scores."
+        description="Train a supervised prototype calibrator on Gemma2 RM scores."
     )
     parser.add_argument(
         "--train-labels",
         default="data/train_split.csv",
-        help="Training split with one-hot labels.",
+        help="Training split with soft or one-hot labels.",
     )
     parser.add_argument(
         "--valid-labels",
         default="data/valid_split.csv",
-        help="Validation split with one-hot labels.",
+        help="Validation split with soft or one-hot labels.",
     )
     parser.add_argument(
         "--train-scores",
@@ -48,7 +47,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Validation probability output CSV. Defaults to "
-            "output/<run>/RM_LogisticRegression/rm_mlp_calibrated_valid_predictions.csv."
+            "output/<run>/RM_LogisticRegression/"
+            "rm_prototype_calibrated_valid_predictions.csv."
         ),
     )
     parser.add_argument(
@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Trained classifier output path. Defaults to "
-            "output/<run>/RM_LogisticRegression/rm_mlp_calibrator.pt."
+            "output/<run>/RM_LogisticRegression/rm_prototype_calibrator.pt."
         ),
     )
     parser.add_argument(
@@ -69,14 +69,25 @@ def parse_args() -> argparse.Namespace:
             "formatted as YYYY-MM-DD_HH-MM."
         ),
     )
-    parser.add_argument("--hidden-dim", type=int, default=32)
-    parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--weight-decay", type=float, default=1e-2)
+    parser.add_argument(
+        "--init-method",
+        choices=["class-mean", "kmeans++"],
+        default="class-mean",
+        help="How to initialize the three class prototypes.",
+    )
+    parser.add_argument(
+        "--learn-feature-weights",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Learn a positive diagonal feature weight for the distance function.",
+    )
+    parser.add_argument("--initial-temperature", type=float, default=1.0)
+    parser.add_argument("--learning-rate", type=float, default=1e-2)
+    parser.add_argument("--weight-decay", type=float, default=1e-3)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--max-epochs", type=int, default=300)
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--min-delta", type=float, default=1e-5)
+    parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--min-delta", type=float, default=1e-6)
     parser.add_argument(
         "--device",
         default="auto",
@@ -100,7 +111,16 @@ def parse_args() -> argparse.Namespace:
         "--shuffle-seed",
         type=int,
         default=42,
-        help="Random seed used to shuffle augmented training rows.",
+        help="Random seed used for augmentation, initialization, and training.",
+    )
+    parser.add_argument(
+        "--valid-tta",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Average validation predictions with swapped A/B test-time augmentation. "
+            "Enabled by default."
+        ),
     )
     return parser.parse_args()
 
@@ -108,8 +128,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     print("[stage 1/5] Resolve paths and configuration")
-    default_output_path = default_mlp_calibrator_output_path(args.output_date)
-    default_model_path = default_mlp_calibrator_model_path(args.output_date)
+    default_output_path = default_prototype_calibrator_output_path(args.output_date)
+    default_model_path = default_prototype_calibrator_model_path(args.output_date)
     output_path = Path(args.output) if args.output is not None else default_output_path
     model_output_path = (
         Path(args.model_output) if args.model_output is not None else default_model_path
@@ -135,8 +155,10 @@ def main() -> None:
     print(f"  allow_partial: {args.allow_partial}")
     print(f"  augment_swapped: {args.augment_swapped}")
     print(f"  shuffle_seed: {args.shuffle_seed}")
-    print(f"  hidden_dim: {args.hidden_dim}")
-    print(f"  dropout: {args.dropout}")
+    print(f"  valid_tta: {args.valid_tta}")
+    print(f"  init_method: {args.init_method}")
+    print(f"  learn_feature_weights: {args.learn_feature_weights}")
+    print(f"  initial_temperature: {args.initial_temperature}")
     print(f"  learning_rate: {args.learning_rate}")
     print(f"  weight_decay: {args.weight_decay}")
     print(f"  batch_size: {args.batch_size}")
@@ -161,12 +183,13 @@ def main() -> None:
     )
     print(f"  valid rows: {len(valid_df)}")
 
-    print("[stage 4/5] Train MLP calibrator and predict validation probabilities")
-    result = train_mlp_calibrator(
+    print("[stage 4/5] Train prototype calibrator and predict validation probabilities")
+    result = train_prototype_calibrator(
         train_df,
         valid_df,
-        hidden_dim=args.hidden_dim,
-        dropout=args.dropout,
+        init_method=args.init_method,
+        learn_feature_weights=args.learn_feature_weights,
+        initial_temperature=args.initial_temperature,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         batch_size=args.batch_size,
@@ -176,6 +199,7 @@ def main() -> None:
         augment_swapped=args.augment_swapped,
         shuffle_seed=args.shuffle_seed,
         device_name=args.device,
+        valid_tta=args.valid_tta,
     )
 
     print("[stage 5/5] Write predictions and report log loss")
@@ -192,13 +216,25 @@ def main() -> None:
             "allow_partial": args.allow_partial,
             "augment_swapped": args.augment_swapped,
             "shuffle_seed": args.shuffle_seed,
+            "valid_tta": args.valid_tta,
             "validation_log_loss": result.loss,
             "validation_accuracy": result.accuracy,
+            "validation_base_log_loss": result.base_loss,
+            "validation_base_accuracy": result.base_accuracy,
+            "validation_tta_log_loss": result.tta_loss,
+            "validation_tta_accuracy": result.tta_accuracy,
             "validation_rows": len(valid_df),
         },
         model_output_path,
     )
 
+    print(f"base_log_loss={result.base_loss:.8f}")
+    print(f"base_manual_log_loss={result.base_manual_loss:.8f}")
+    print(f"base_accuracy={result.base_accuracy:.8f}")
+    if result.tta_loss is not None:
+        print(f"tta_log_loss={result.tta_loss:.8f}")
+        print(f"tta_manual_log_loss={result.tta_manual_loss:.8f}")
+        print(f"tta_accuracy={result.tta_accuracy:.8f}")
     print(f"log_loss={result.loss:.8f}")
     print(f"manual_log_loss={result.manual_loss:.8f}")
     print(f"accuracy={result.accuracy:.8f}")

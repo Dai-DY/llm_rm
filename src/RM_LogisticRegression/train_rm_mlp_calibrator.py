@@ -1,20 +1,20 @@
 import argparse
 from pathlib import Path
 
-import _bootstrap  # noqa: F401
-import joblib
+import torch
 
-from RM_LogisticRegression.calibration import read_joined_scores, train_logistic_calibrator
-from RM_LogisticRegression.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
+from RM_LogisticRegression.calibration import read_joined_scores
+from RM_LogisticRegression.mlp_calibration import train_mlp_calibrator
 from RM_LogisticRegression.paths import (
-    default_calibrator_model_path,
     default_calibrator_output_path,
+    default_mlp_calibrator_model_path,
+    default_mlp_calibrator_output_path,
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a three-class calibrator on Gemma2 RM scores."
+        description="Train a three-class MLP calibrator on Gemma2 RM scores."
     )
     parser.add_argument(
         "--train-labels",
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Validation probability output CSV. Defaults to "
-            "output/<run>/RM_LogisticRegression/rm_calibrated_valid_predictions.csv."
+            "output/<run>/RM_LogisticRegression/rm_mlp_calibrated_valid_predictions.csv."
         ),
     )
     parser.add_argument(
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Trained classifier output path. Defaults to "
-            "output/<run>/RM_LogisticRegression/rm_logistic_regression_model.joblib."
+            "output/<run>/RM_LogisticRegression/rm_mlp_calibrator.pt."
         ),
     )
     parser.add_argument(
@@ -68,17 +68,18 @@ def parse_args() -> argparse.Namespace:
             "formatted as YYYY-MM-DD_HH-MM."
         ),
     )
+    parser.add_argument("--hidden-dim", type=int, default=32)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-2)
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--max-epochs", type=int, default=300)
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--min-delta", type=float, default=1e-5)
     parser.add_argument(
-        "--c",
-        type=float,
-        default=1.0,
-        help="Inverse regularization strength for LogisticRegression.",
-    )
-    parser.add_argument(
-        "--max-iter",
-        type=int,
-        default=2000,
-        help="Maximum optimizer iterations.",
+        "--device",
+        default="auto",
+        help="auto, cpu, cuda, or a CUDA device such as cuda:0.",
     )
     parser.add_argument(
         "--allow-partial",
@@ -100,25 +101,28 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed used to shuffle augmented training rows.",
     )
+    parser.add_argument(
+        "--valid-tta",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Average validation predictions with swapped A/B test-time augmentation. "
+            "Enabled by default."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     print("[stage 1/5] Resolve paths and configuration")
-    default_output_path = default_calibrator_output_path(args.output_date)
-    default_model_path = default_calibrator_model_path(args.output_date)
-    output_path = (
-        Path(args.output)
-        if args.output is not None
-        else default_output_path
-    )
+    default_output_path = default_mlp_calibrator_output_path(args.output_date)
+    default_model_path = default_mlp_calibrator_model_path(args.output_date)
+    output_path = Path(args.output) if args.output is not None else default_output_path
     model_output_path = (
-        Path(args.model_output)
-        if args.model_output is not None
-        else default_model_path
+        Path(args.model_output) if args.model_output is not None else default_model_path
     )
-    default_score_dir = default_output_path.parent
+    default_score_dir = default_calibrator_output_path(args.output_date).parent
     train_scores = (
         Path(args.train_scores)
         if args.train_scores is not None
@@ -129,6 +133,7 @@ def main() -> None:
         if args.valid_scores is not None
         else default_score_dir / "valid_split_gemma_rm_scores.csv"
     )
+
     print(f"  train_labels: {args.train_labels}")
     print(f"  valid_labels: {args.valid_labels}")
     print(f"  train_scores: {train_scores}")
@@ -138,8 +143,16 @@ def main() -> None:
     print(f"  allow_partial: {args.allow_partial}")
     print(f"  augment_swapped: {args.augment_swapped}")
     print(f"  shuffle_seed: {args.shuffle_seed}")
-    print(f"  logistic_regression_C: {args.c}")
-    print(f"  max_iter: {args.max_iter}")
+    print(f"  valid_tta: {args.valid_tta}")
+    print(f"  hidden_dim: {args.hidden_dim}")
+    print(f"  dropout: {args.dropout}")
+    print(f"  learning_rate: {args.learning_rate}")
+    print(f"  weight_decay: {args.weight_decay}")
+    print(f"  batch_size: {args.batch_size}")
+    print(f"  max_epochs: {args.max_epochs}")
+    print(f"  patience: {args.patience}")
+    print(f"  min_delta: {args.min_delta}")
+    print(f"  device: {args.device}")
 
     print("[stage 2/5] Read and join train score features")
     train_df = read_joined_scores(
@@ -157,44 +170,60 @@ def main() -> None:
     )
     print(f"  valid rows: {len(valid_df)}")
 
-    print("[stage 4/5] Train LogisticRegression calibrator and predict validation probabilities")
-    output, loss, manual_loss, accuracy, model = train_logistic_calibrator(
+    print("[stage 4/5] Train MLP calibrator and predict validation probabilities")
+    result = train_mlp_calibrator(
         train_df,
         valid_df,
-        c=args.c,
-        max_iter=args.max_iter,
+        hidden_dim=args.hidden_dim,
+        dropout=args.dropout,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        batch_size=args.batch_size,
+        max_epochs=args.max_epochs,
+        patience=args.patience,
+        min_delta=args.min_delta,
         augment_swapped=args.augment_swapped,
         shuffle_seed=args.shuffle_seed,
+        device_name=args.device,
+        valid_tta=args.valid_tta,
     )
 
     print("[stage 5/5] Write predictions and report log loss")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output.to_csv(output_path, index=False)
+    result.output.to_csv(output_path, index=False)
     model_output_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(
+    torch.save(
         {
-            "model": model,
-            "feature_columns": RM_FEATURE_COLUMNS,
-            "label_columns": LABEL_COLUMNS,
+            **result.checkpoint,
             "train_labels": str(args.train_labels),
             "valid_labels": str(args.valid_labels),
             "train_scores": str(train_scores),
             "valid_scores": str(valid_scores),
-            "c": args.c,
-            "max_iter": args.max_iter,
             "allow_partial": args.allow_partial,
             "augment_swapped": args.augment_swapped,
             "shuffle_seed": args.shuffle_seed,
-            "validation_log_loss": loss,
-            "validation_accuracy": accuracy,
+            "valid_tta": args.valid_tta,
+            "validation_log_loss": result.loss,
+            "validation_accuracy": result.accuracy,
+            "validation_base_log_loss": result.base_loss,
+            "validation_base_accuracy": result.base_accuracy,
+            "validation_tta_log_loss": result.tta_loss,
+            "validation_tta_accuracy": result.tta_accuracy,
             "validation_rows": len(valid_df),
         },
         model_output_path,
     )
 
-    print(f"log_loss={loss:.8f}")
-    print(f"manual_log_loss={manual_loss:.8f}")
-    print(f"accuracy={accuracy:.8f}")
+    print(f"base_log_loss={result.base_loss:.8f}")
+    print(f"base_manual_log_loss={result.base_manual_loss:.8f}")
+    print(f"base_accuracy={result.base_accuracy:.8f}")
+    if result.tta_loss is not None:
+        print(f"tta_log_loss={result.tta_loss:.8f}")
+        print(f"tta_manual_log_loss={result.tta_manual_loss:.8f}")
+        print(f"tta_accuracy={result.tta_accuracy:.8f}")
+    print(f"log_loss={result.loss:.8f}")
+    print(f"manual_log_loss={result.manual_loss:.8f}")
+    print(f"accuracy={result.accuracy:.8f}")
     print(f"rows={len(valid_df)}")
     print(f"Wrote {output_path}")
     print(f"Wrote {model_output_path}")

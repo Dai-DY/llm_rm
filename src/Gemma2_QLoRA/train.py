@@ -261,6 +261,12 @@ def parse_args() -> argparse.Namespace:
         help="MLP hidden size as a fraction of Gemma2 hidden size.",
     )
     parser.add_argument(
+        "--head-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Freeze the base model and LoRA weights; train only the classification head.",
+    )
+    parser.add_argument(
         "--target-modules",
         default="all-linear",
         help='Use "all-linear" or a comma-separated module list.',
@@ -415,10 +421,13 @@ def main() -> None:
     print(f"  classifier_head: {args.classifier_head}")
     print(f"  head_dropout: {args.head_dropout}")
     print(f"  head_hidden_ratio: {args.head_hidden_ratio}")
+    print(f"  head_only: {args.head_only}")
     print(f"  swap_consistency_weight: {args.swap_consistency_weight}")
     print(f"  swap_ce_weight: {args.swap_ce_weight}")
     print(f"  prototype_loss_weight: {args.prototype_loss_weight}")
     print(f"  prototype_momentum: {args.prototype_momentum}")
+    if args.head_only and args.prototype_loss_weight > 0.0:
+        print("  warning: prototype_loss_weight has no trainable hidden-state path in head-only mode.")
 
     print("[stage 2/5] Build datasets")
     train_dataset = PreferenceDataset(
@@ -469,6 +478,7 @@ def main() -> None:
         classifier_head=args.classifier_head,
         head_dropout=args.head_dropout,
         head_hidden_ratio=args.head_hidden_ratio,
+        head_only=args.head_only,
     )
     model.print_trainable_parameters()
 
@@ -527,6 +537,7 @@ def main() -> None:
         f'  "classifier_head": "{args.classifier_head}",\n'
         f'  "head_dropout": {args.head_dropout},\n'
         f'  "head_hidden_ratio": {args.head_hidden_ratio},\n'
+        f'  "head_only": {str(args.head_only).lower()},\n'
         f'  "disable_softcapping": {str(args.disable_softcapping).lower()},\n'
         f'  "swap_consistency_weight": {args.swap_consistency_weight},\n'
         f'  "swap_ce_weight": {args.swap_ce_weight},\n'

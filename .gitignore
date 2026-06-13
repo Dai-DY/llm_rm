@@ -53,3 +53,5 @@ logs/
 *.log
 tmp/
 temp/
+
+assets/

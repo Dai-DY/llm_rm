@@ -33,9 +33,20 @@ def maybe_disable_softcapping(config, disable_softcapping: bool):
     return config
 
 
+GEMMA2_LINEAR_TARGET_MODULES = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+
 def parse_target_modules(value: str) -> str | list[str]:
     if value == "all-linear":
-        return value
+        return GEMMA2_LINEAR_TARGET_MODULES
     return [module.strip() for module in value.split(",") if module.strip()]
 
 
@@ -157,6 +168,7 @@ def load_gemma2_sequence_classifier(
     classifier_head: str,
     head_dropout: float,
     head_hidden_ratio: float,
+    head_only: bool = False,
 ):
     from peft import (
         LoraConfig,
@@ -230,4 +242,16 @@ def load_gemma2_sequence_classifier(
             modules_to_save=["score"],
         )
         model = get_peft_model(model, lora_config)
+    if head_only:
+        freeze_except_classification_head(model)
     return model
+
+
+def freeze_except_classification_head(model) -> None:
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad = (
+            name.startswith("score.")
+            or ".score." in name
+            or name.endswith(".score.weight")
+            or name.endswith(".score.bias")
+        )

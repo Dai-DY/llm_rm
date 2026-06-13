@@ -4,7 +4,7 @@ set -euo pipefail
 REMOTE_USER="${REMOTE_USER:-root}"
 REMOTE_HOST="${REMOTE_HOST:-10.15.171.204}"
 REMOTE_PORT="${REMOTE_PORT:-30428}"
-REMOTE_DIR="${REMOTE_DIR:-/2024571007/iml/qwen_finetune}"
+REMOTE_DIR="${REMOTE_DIR:-/2024571007/iml/llm_preference_modeling}"
 REMOTE_PASSWORD='x^Uj5qNZi3sOi6UWv*p9iudiH$mHq6po'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +31,7 @@ if [[ "${REMOTE_PASSWORD}" == "请把这里改成你的SSH密码" || -z "${REMOT
 fi
 
 SSH_TARGET="${REMOTE_USER}@${REMOTE_HOST}"
-CONTROL_PATH="${TMPDIR:-/tmp}/qwen_finetune_ssh_${REMOTE_HOST}_${REMOTE_PORT}_${REMOTE_USER}_$$"
+CONTROL_PATH="${TMPDIR:-/tmp}/llm_preference_modeling_ssh_${REMOTE_HOST}_${REMOTE_PORT}_${REMOTE_USER}_$$"
 SSH_OPTS=(
   -p "${REMOTE_PORT}"
   -o ControlMaster=auto
@@ -45,7 +45,6 @@ SCP_OPTS=(
   -o ControlPersist=10m
 )
 UPLOAD_ITEMS=(
-  "data"
   "README.md"
   "src"
   "scripts"

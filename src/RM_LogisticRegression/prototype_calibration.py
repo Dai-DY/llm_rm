@@ -7,11 +7,14 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from RM_LogisticRegression.calibration import (
+    average_tta_probabilities,
     augment_with_swapped_responses,
+    evaluate_probabilities,
     labels_to_class_ids,
+    make_prediction_output,
+    swap_response_features,
 )
 from RM_LogisticRegression.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
-from RM_LogisticRegression.metrics import multiclass_accuracy, multiclass_log_loss
 from RM_LogisticRegression.mlp_calibration import set_torch_seed, standardize_features
 
 
@@ -21,6 +24,14 @@ class PrototypeTrainingResult:
     loss: float
     manual_loss: float
     accuracy: float
+    base_output: pd.DataFrame
+    base_loss: float
+    base_manual_loss: float
+    base_accuracy: float
+    tta_output: pd.DataFrame | None
+    tta_loss: float | None
+    tta_manual_loss: float | None
+    tta_accuracy: float | None
     checkpoint: dict
 
 
@@ -134,6 +145,7 @@ def train_prototype_calibrator(
     augment_swapped: bool,
     shuffle_seed: int,
     device_name: str,
+    valid_tta: bool = False,
 ) -> PrototypeTrainingResult:
     print("  preparing feature matrices")
     if augment_swapped:
@@ -152,7 +164,6 @@ def train_prototype_calibrator(
     y_train_hard = labels_to_class_ids(train_df)
     x_valid_raw = valid_df[RM_FEATURE_COLUMNS].to_numpy(dtype=np.float32)
     y_valid_one_hot = valid_df[LABEL_COLUMNS].to_numpy(dtype=np.float64)
-    y_valid_hard = labels_to_class_ids(valid_df)
     print(f"  x_train shape: {x_train_raw.shape}")
     print(f"  x_valid shape: {x_valid_raw.shape}")
 
@@ -257,14 +268,49 @@ def train_prototype_calibrator(
 
     model.load_state_dict(best_state)
     print("  predicting validation probabilities")
-    ordered_probabilities = predict_probabilities(model, x_valid, device, batch_size)
+    base_probabilities = predict_probabilities(model, x_valid, device, batch_size)
+    base_loss, base_manual_loss, base_accuracy = evaluate_probabilities(
+        valid_df,
+        base_probabilities,
+    )
+    base_output = make_prediction_output(valid_df, base_probabilities)
 
-    loss = multiclass_log_loss(y_valid_one_hot, ordered_probabilities, clip=1e-15)
-    accuracy = multiclass_accuracy(y_valid_one_hot, ordered_probabilities)
-
-    output = pd.DataFrame({"id": valid_df["id"].to_numpy()})
-    for index, column in enumerate(LABEL_COLUMNS):
-        output[column] = ordered_probabilities[:, index]
+    tta_output = None
+    tta_loss = None
+    tta_manual_loss = None
+    tta_accuracy = None
+    output = base_output
+    loss = base_loss
+    manual_loss = base_manual_loss
+    accuracy = base_accuracy
+    if valid_tta:
+        print("  predicting swapped validation probabilities for TTA")
+        swapped_valid_df = swap_response_features(valid_df)
+        x_valid_swapped_raw = swapped_valid_df[RM_FEATURE_COLUMNS].to_numpy(
+            dtype=np.float32,
+        )
+        x_valid_swapped = ((x_valid_swapped_raw - feature_mean) / feature_std).astype(
+            np.float32,
+        )
+        swapped_probabilities = predict_probabilities(
+            model,
+            x_valid_swapped,
+            device,
+            batch_size,
+        )
+        tta_probabilities = average_tta_probabilities(
+            base_probabilities,
+            swapped_probabilities,
+        )
+        tta_loss, tta_manual_loss, tta_accuracy = evaluate_probabilities(
+            valid_df,
+            tta_probabilities,
+        )
+        tta_output = make_prediction_output(valid_df, tta_probabilities)
+        output = tta_output
+        loss = tta_loss
+        manual_loss = tta_manual_loss
+        accuracy = tta_accuracy
 
     checkpoint = {
         "model_state_dict": best_state,
@@ -284,6 +330,11 @@ def train_prototype_calibrator(
         "min_delta": min_delta,
         "best_epoch": best_epoch,
         "best_valid_loss": best_loss,
+        "valid_tta": valid_tta,
+        "validation_base_log_loss": base_loss,
+        "validation_base_accuracy": base_accuracy,
+        "validation_tta_log_loss": tta_loss,
+        "validation_tta_accuracy": tta_accuracy,
         "final_temperature": float(model.temperature().detach().cpu().item()),
         "final_feature_weights": model.feature_weights().detach().cpu().numpy(),
         "final_prototypes": model.prototypes.detach().cpu().numpy(),
@@ -291,7 +342,15 @@ def train_prototype_calibrator(
     return PrototypeTrainingResult(
         output=output,
         loss=float(loss),
-        manual_loss=float(loss),
+        manual_loss=manual_loss,
         accuracy=accuracy,
+        base_output=base_output,
+        base_loss=base_loss,
+        base_manual_loss=base_manual_loss,
+        base_accuracy=base_accuracy,
+        tta_output=tta_output,
+        tta_loss=tta_loss,
+        tta_manual_loss=tta_manual_loss,
+        tta_accuracy=tta_accuracy,
         checkpoint=checkpoint,
     )

@@ -29,18 +29,6 @@ PROFILES = {
                 "dtype": "bfloat16",
                 "load_in_4bit": False,
             },
-            "qwen_train": {
-                "batch_size": 4,
-                "eval_batch_size": 4,
-                "gradient_accumulation_steps": 4,
-                "dtype": "bfloat16",
-                "load_in_4bit": False,
-            },
-            "qwen_predict": {
-                "batch_size": 4,
-                "dtype": "bfloat16",
-                "load_in_4bit": False,
-            },
             "rm_score": {
                 "batch_size": 2,
                 "dtype": "bfloat16",
@@ -66,18 +54,6 @@ PROFILES = {
                 "dtype": "bfloat16",
                 "load_in_4bit": False,
             },
-            "qwen_train": {
-                "batch_size": 16,
-                "eval_batch_size": 16,
-                "gradient_accumulation_steps": 1,
-                "dtype": "bfloat16",
-                "load_in_4bit": False,
-            },
-            "qwen_predict": {
-                "batch_size": 16,
-                "dtype": "bfloat16",
-                "load_in_4bit": False,
-            },
             "rm_score": {
                 "batch_size": 8,
                 "dtype": "bfloat16",
@@ -100,18 +76,6 @@ PROFILES = {
             },
             "gemma_predict": {
                 "batch_size": 8,
-                "dtype": "bfloat16",
-                "load_in_4bit": False,
-            },
-            "qwen_train": {
-                "batch_size": 16,
-                "eval_batch_size": 16,
-                "gradient_accumulation_steps": 1,
-                "dtype": "bfloat16",
-                "load_in_4bit": False,
-            },
-            "qwen_predict": {
-                "batch_size": 16,
                 "dtype": "bfloat16",
                 "load_in_4bit": False,
             },
