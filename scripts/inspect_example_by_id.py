@@ -5,8 +5,8 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import pandas as pd
 
-from RM_LogisticRegression.constants import LABEL_COLUMNS
-from RM_LogisticRegression.data import read_required_columns, validate_one_hot_labels
+from RM_LogisticRegression.utils.constants import LABEL_COLUMNS
+from RM_LogisticRegression.data.processing import read_required_columns, validate_one_hot_labels
 
 
 TEXT_COLUMNS = ["model_a", "model_b", "prompt", "response_a", "response_b"]

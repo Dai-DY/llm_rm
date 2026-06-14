@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from RM_LogisticRegression.constants import LABEL_COLUMNS
+from RM_LogisticRegression.utils.constants import LABEL_COLUMNS
 
 
 def parse_json_list(value: str) -> list[str]:

@@ -8,13 +8,13 @@ from sklearn.metrics import log_loss
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from RM_LogisticRegression.constants import (
+from RM_LogisticRegression.utils.constants import (
     LABEL_COLUMNS,
     RM_BASE_FEATURE_COLUMNS,
     RM_FEATURE_COLUMNS,
 )
-from RM_LogisticRegression.data import validate_one_hot_labels
-from RM_LogisticRegression.metrics import multiclass_accuracy
+from RM_LogisticRegression.data.processing import validate_one_hot_labels
+from RM_LogisticRegression.utils.metrics import multiclass_accuracy
 
 
 @dataclass

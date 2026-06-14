@@ -5,14 +5,14 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-from RM_LogisticRegression.calibration import read_joined_scores
-from RM_LogisticRegression.paths import (
+from RM_LogisticRegression.models.calibration import read_joined_scores
+from RM_LogisticRegression.utils.paths import (
     default_calibrator_output_path,
     default_prototype_search_best_model_path,
     default_prototype_search_best_output_path,
     default_prototype_search_results_path,
 )
-from RM_LogisticRegression.prototype_calibration import train_prototype_calibrator
+from RM_LogisticRegression.models.prototype_calibration import train_prototype_calibrator
 
 
 def parse_bool_list(value: str) -> list[bool]:

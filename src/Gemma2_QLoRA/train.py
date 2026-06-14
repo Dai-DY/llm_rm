@@ -8,14 +8,15 @@ import torch
 import torch.nn.functional as F
 
 from hardware_profiles import add_hardware_profile_argument, apply_profile_defaults
-from Gemma2_QLoRA.constants import DEFAULT_MODEL_PATH, DEFAULT_OUTPUT_DIR, LABEL_COLUMNS
-from Gemma2_QLoRA.data import DataCollatorForPreference, PreferenceDataset
-from Gemma2_QLoRA.metrics import multiclass_log_loss, softmax
-from Gemma2_QLoRA.modeling import (
+from Gemma2_QLoRA.utils.constants import DEFAULT_MODEL_PATH, DEFAULT_OUTPUT_DIR, LABEL_COLUMNS
+from Gemma2_QLoRA.data.preference import DataCollatorForPreference, PreferenceDataset
+from Gemma2_QLoRA.utils.metrics import multiclass_log_loss, softmax
+from Gemma2_QLoRA.models.modeling import (
     load_gemma2_sequence_classifier,
     load_tokenizer,
     parse_target_modules,
 )
+from Gemma2_QLoRA.utils.representations import pooled_last_hidden
 
 
 def make_training_arguments(training_arguments_cls, **kwargs):
@@ -51,13 +52,6 @@ def swap_label_ids(labels: torch.Tensor) -> torch.Tensor:
 
 def restore_swapped_logits(logits: torch.Tensor) -> torch.Tensor:
     return logits[:, [1, 0, 2]]
-
-
-def pooled_last_hidden(outputs, attention_mask: torch.Tensor) -> torch.Tensor:
-    hidden_states = outputs.hidden_states[-1]
-    sequence_lengths = attention_mask.sum(dim=1).to(hidden_states.device) - 1
-    batch_indices = torch.arange(hidden_states.size(0), device=hidden_states.device)
-    return hidden_states[batch_indices, sequence_lengths]
 
 
 class RepresentationPreferenceTrainer:

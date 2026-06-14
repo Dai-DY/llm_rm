@@ -22,12 +22,57 @@ models/
 
 scripts/
   create_validation_split.py
+  download_models.py
+  download_trained_outputs.py
   evaluate_log_loss.py
   score_gemma_rm.py
 
 src/
+  EncoderEnsemble/
+    data/
+      processing.py
+    inference/
+      rule_adjustment.py
+    models/
+      blocks.py
+    utils/
+      device.py
+      plotting.py
+    train_pretrained_preference_model.py
+    train_pairwise_context_response_encoder.py
+    train_cross_context_response_encoder.py
+    train_single_turn_weighted_encoder.py
+    ensemble_preference_models.py
+    predict_ensemble_test.py
   Gemma2_QLoRA/
+    data/
+      preference.py
+    models/
+      modeling.py
+    utils/
+      constants.py
+      metrics.py
+      representations.py
+    train.py
+    predict.py
+    extract_gemma2_features.py
+    train_gemma2_mlp_head_from_features.py
+    predict_gemma2_mlp_head_from_features.py
+    search_gemma_mlp_head_hparams.py
+    search_gemma2_feature_mlp_head_hparams.py
   RM_LogisticRegression/
+    data/
+      processing.py
+    inference/
+      rm_scoring.py
+    models/
+      calibration.py
+      mlp_calibration.py
+      prototype_calibration.py
+    utils/
+      constants.py
+      metrics.py
+      paths.py
     train_rm_calibrator.py
     train_rm_mlp_calibrator.py
     train_rm_prototype_calibrator.py
@@ -41,6 +86,37 @@ Use the `deepl` environment:
 conda activate deepl
 ```
 
+## Prepare Models
+
+Download all pretrained model folders used by the project:
+
+```bash
+python scripts/download_models.py \
+  --hf-endpoint https://hf-mirror.com
+```
+
+The script checks `models/` first and downloads only missing or incomplete
+folders. Required local model folders:
+
+```text
+models/distilbert-base-uncased
+models/deberta-v3-large
+models/sfairXC__FsfairX-Gemma2-RM-v0.1
+```
+
+Download trained output/checkpoint artifacts from KaggleHub:
+
+```bash
+python scripts/download_trained_outputs.py
+```
+
+Default output folders:
+
+```text
+output/gemma2_finetune/
+output/EncoderEnsemble/
+```
+
 All GPU-heavy training and evaluation scripts support hardware profiles:
 
 - `--hardware-profile auto`: default; detects dual H20 when at least two visible CUDA devices include `H20`, detects single H20 when exactly one visible CUDA device includes `H20`, otherwise uses 4090 defaults.
@@ -49,6 +125,108 @@ All GPU-heavy training and evaluation scripts support hardware profiles:
 - `--hardware-profile h20x2`: two H20 GPUs. Use `torchrun --nproc_per_node 2` for LoRA training.
 
 Profiles only fill defaults. Explicit values such as `--batch-size`, `--eval-batch-size`, `--gradient-accumulation-steps`, `--dtype`, `--load-in-4bit`, and `--gpu-memory` still override the profile.
+
+## Four-Encoder Preference Ensemble
+
+This method trains and ensembles four encoder classifiers for pairwise response
+preference prediction:
+
+```text
+context encoder        DistilBERT, separate context/response branches
+pairwise encoder       DeBERTa-v3-large, pair A and pair B branches
+cross encoder          DeBERTa-v3-large, shared cross-input branch
+single-turn encoder    DeBERTa-v3-large, weighted current-turn samples
+```
+
+Train the four checkpoints:
+
+```bash
+PYTHONPATH=src python src/EncoderEnsemble/train_pretrained_preference_model.py \
+  --train-size 50000 \
+  --valid-size 5000 \
+  --epochs 2 \
+  --batch-size 4 \
+  --local-files-only
+
+PYTHONPATH=src python src/EncoderEnsemble/train_pairwise_context_response_encoder.py \
+  --train-size 50000 \
+  --valid-size 5000 \
+  --epochs 3 \
+  --batch-size 1 \
+  --lr 5e-7 \
+  --local-files-only
+
+PYTHONPATH=src python src/EncoderEnsemble/train_cross_context_response_encoder.py \
+  --train-size 50000 \
+  --valid-size 5000 \
+  --epochs 3 \
+  --batch-size 1 \
+  --lr 5e-7 \
+  --local-files-only
+
+PYTHONPATH=src python src/EncoderEnsemble/train_single_turn_weighted_encoder.py \
+  --train-size 50000 \
+  --valid-size 5000 \
+  --epochs 2 \
+  --batch-size 1 \
+  --lr 5e-7 \
+  --local-files-only
+```
+
+Default checkpoint outputs:
+
+```text
+output/EncoderEnsemble/best_context_pretrained_preference_model.pt
+output/EncoderEnsemble/best_pairwise_context_response_encoder.pt
+output/EncoderEnsemble/best_cross_context_response_encoder.pt
+output/EncoderEnsemble/best_single_turn_weighted_encoder.pt
+```
+
+Evaluate the validation ensemble:
+
+```bash
+PYTHONPATH=src python src/EncoderEnsemble/ensemble_preference_models.py \
+  --train-size 50000 \
+  --valid-size 5000 \
+  --batch-size 8 \
+  --local-files-only
+```
+
+Default ensemble weights:
+
+```text
+context      0.1845
+pairwise     0.3197
+cross        0.3605
+single_turn  0.1354
+```
+
+Validation writes:
+
+```text
+output/EncoderEnsemble/ensemble_config.json
+```
+
+Generate test predictions:
+
+```bash
+PYTHONPATH=src python src/EncoderEnsemble/predict_ensemble_test.py \
+  --batch-size 8 \
+  --local-files-only \
+  --output-path output/EncoderEnsemble/submission.csv
+```
+
+Useful arguments:
+
+- `--base-path`: project root containing `data/`, `models/`, and `output/`.
+- `--train-size`, `--valid-size`: sampled train/validation sizes.
+- `--history-turns`: number of previous conversation turns packed into context.
+- `--max-length`: tokenizer truncation length. Recommended: `512`.
+- `--batch-size`: training or inference batch size.
+- `--local-files-only`: use only local HuggingFace model folders.
+- `--allow-cpu`: allow CPU execution for smoke tests.
+- `--weights`: override ensemble weights in context, pairwise, cross, single-turn order.
+- `--disable-rule-adjustment`: disable rule-based post-processing.
 
 ## RM Logistic Regression Baseline
 

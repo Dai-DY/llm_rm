@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from hardware_profiles import max_memory_map, model_input_device
-from RM_LogisticRegression.data import build_reward_text, text_char_length
+from RM_LogisticRegression.data.processing import build_reward_text, text_char_length
 
 
 def progress_iter(iterable, total: int, initial: int, description: str):

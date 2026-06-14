@@ -9,9 +9,9 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from Gemma2_QLoRA.constants import LABEL_COLUMNS
-from Gemma2_QLoRA.metrics import multiclass_log_loss, softmax
-from Gemma2_QLoRA.modeling import MLPClassificationHead
+from Gemma2_QLoRA.utils.constants import LABEL_COLUMNS
+from Gemma2_QLoRA.utils.metrics import multiclass_log_loss, softmax
+from Gemma2_QLoRA.models.modeling import MLPClassificationHead
 
 
 def parse_args() -> argparse.Namespace:

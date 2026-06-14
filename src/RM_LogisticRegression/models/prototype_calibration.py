@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from RM_LogisticRegression.calibration import (
+from RM_LogisticRegression.models.calibration import (
     average_tta_probabilities,
     augment_with_swapped_responses,
     evaluate_probabilities,
@@ -14,8 +14,8 @@ from RM_LogisticRegression.calibration import (
     make_prediction_output,
     swap_response_features,
 )
-from RM_LogisticRegression.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
-from RM_LogisticRegression.mlp_calibration import set_torch_seed, standardize_features
+from RM_LogisticRegression.utils.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
+from RM_LogisticRegression.models.mlp_calibration import set_torch_seed, standardize_features
 
 
 @dataclass

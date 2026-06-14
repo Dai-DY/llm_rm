@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-from Gemma2_QLoRA.constants import LABEL_COLUMNS
-from Gemma2_QLoRA.metrics import softmax
-from Gemma2_QLoRA.modeling import MLPClassificationHead
+from Gemma2_QLoRA.utils.constants import LABEL_COLUMNS
+from Gemma2_QLoRA.utils.metrics import softmax
+from Gemma2_QLoRA.models.modeling import MLPClassificationHead
 
 
 def parse_args() -> argparse.Namespace:

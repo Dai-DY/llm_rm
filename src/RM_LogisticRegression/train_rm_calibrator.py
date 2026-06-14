@@ -3,9 +3,9 @@ from pathlib import Path
 
 import joblib
 
-from RM_LogisticRegression.calibration import read_joined_scores, train_logistic_calibrator
-from RM_LogisticRegression.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
-from RM_LogisticRegression.paths import (
+from RM_LogisticRegression.models.calibration import read_joined_scores, train_logistic_calibrator
+from RM_LogisticRegression.utils.constants import LABEL_COLUMNS, RM_FEATURE_COLUMNS
+from RM_LogisticRegression.utils.paths import (
     default_calibrator_model_path,
     default_calibrator_output_path,
 )

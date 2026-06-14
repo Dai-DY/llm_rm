@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from Gemma2_QLoRA.constants import LABEL_COLUMNS
+from Gemma2_QLoRA.utils.constants import LABEL_COLUMNS
 
 
 def parse_json_list(value: str) -> list[str]:

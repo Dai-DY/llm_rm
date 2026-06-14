@@ -5,8 +5,8 @@ import _bootstrap  # noqa: F401
 import pandas as pd
 
 from hardware_profiles import add_hardware_profile_argument, apply_profile_defaults
-from RM_LogisticRegression.rm_scoring import load_reward_model, score_dataframe
-from RM_LogisticRegression.paths import default_score_output_path
+from RM_LogisticRegression.inference.rm_scoring import load_reward_model, score_dataframe
+from RM_LogisticRegression.utils.paths import default_score_output_path
 
 
 def parse_args() -> argparse.Namespace:

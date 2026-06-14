@@ -4,8 +4,8 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import pandas as pd
 
-from Gemma2_QLoRA.constants import DEFAULT_MODEL_PATH as DEFAULT_GEMMA2_MODEL_PATH
-from Gemma2_QLoRA.data import build_compact_pair_text
+from Gemma2_QLoRA.utils.constants import DEFAULT_MODEL_PATH as DEFAULT_GEMMA2_MODEL_PATH
+from Gemma2_QLoRA.data.preference import build_compact_pair_text
 
 
 TEXT_COLUMNS = ["id", "prompt", "response_a", "response_b"]

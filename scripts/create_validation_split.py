@@ -5,7 +5,7 @@ import _bootstrap  # noqa: F401
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from RM_LogisticRegression.data import label_names, print_label_distribution
+from RM_LogisticRegression.data.processing import label_names, print_label_distribution
 
 
 def parse_args() -> argparse.Namespace:

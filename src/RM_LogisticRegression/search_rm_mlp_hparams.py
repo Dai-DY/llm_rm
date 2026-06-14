@@ -5,9 +5,9 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-from RM_LogisticRegression.calibration import read_joined_scores
-from RM_LogisticRegression.mlp_calibration import train_mlp_calibrator
-from RM_LogisticRegression.paths import (
+from RM_LogisticRegression.models.calibration import read_joined_scores
+from RM_LogisticRegression.models.mlp_calibration import train_mlp_calibrator
+from RM_LogisticRegression.utils.paths import (
     default_calibrator_output_path,
     default_mlp_search_best_model_path,
     default_mlp_search_best_output_path,

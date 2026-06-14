@@ -37,6 +37,13 @@ Thumbs.db
 data/
 output/
 models/
+!src/**/data/
+!src/**/data/**
+!src/**/models/
+!src/**/models/**
+**/__pycache__/
+**/__pycache__/**
+**/*.py[cod]
 
 # Large model/checkpoint artifacts that may appear outside models/
 *.safetensors

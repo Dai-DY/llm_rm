@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 from hardware_profiles import kbit_device_map
-from Gemma2_QLoRA.constants import ID_TO_LABEL, LABEL_TO_ID
+from Gemma2_QLoRA.utils.constants import ID_TO_LABEL, LABEL_TO_ID
 
 
 def torch_dtype(dtype: str):

@@ -13,16 +13,16 @@ from hardware_profiles import (
     kbit_device_map,
     model_input_device,
 )
-from Gemma2_QLoRA.constants import DEFAULT_MODEL_PATH, LABEL_COLUMNS
-from Gemma2_QLoRA.data import DataCollatorForPreference, PreferenceDataset
-from Gemma2_QLoRA.metrics import softmax
-from Gemma2_QLoRA.modeling import (
+from Gemma2_QLoRA.utils.constants import DEFAULT_MODEL_PATH, LABEL_COLUMNS
+from Gemma2_QLoRA.data.preference import DataCollatorForPreference, PreferenceDataset
+from Gemma2_QLoRA.utils.metrics import softmax
+from Gemma2_QLoRA.models.modeling import (
     maybe_disable_softcapping,
     peft_adapter_with_supported_config,
     replace_classification_head,
     torch_dtype,
 )
-from Gemma2_QLoRA.modeling import load_tokenizer
+from Gemma2_QLoRA.models.modeling import load_tokenizer
 
 
 def parse_args() -> argparse.Namespace:

@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from Gemma2_QLoRA.constants import LABEL_COLUMNS
+from Gemma2_QLoRA.utils.constants import LABEL_COLUMNS
 
 
 ROOT = Path(__file__).resolve().parents[2]

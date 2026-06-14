@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from RM_LogisticRegression.constants import METHOD_NAME
+from RM_LogisticRegression.utils.constants import METHOD_NAME
 
 
 def run_output_dir(run_name: str | None = None) -> Path:
